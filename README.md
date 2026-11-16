@@ -102,6 +102,17 @@ number, so nothing is overwritten.
   "Discord 10 MB" (MP4 under 10 MB) or "Web" (WebP, 1920 px, quality 80).
   Each preset picks a wheel, a file type, an output format and any of the
   changes below.
+- **Preset keys.** Give a preset a quick key in Settings > Presets. Press it
+  while dragging a file and drop anywhere to run that preset with no wheel.
+  The key is only taken while a mouse button is held.
+- **Share presets.** Copy all presets as JSON or save them to a file, and
+  import from a file or pasted text. Imports are checked first (unknown or
+  wrongly typed fields are rejected) and are added to your list.
+- **Custom ffmpeg arguments.** Each preset has an advanced field for extra
+  ffmpeg arguments, for example `-preset slow -metadata "title=x"`. Quotes
+  group words; the text is passed to ffmpeg as separate arguments, never
+  through a shell, and `-i` is not allowed. Crystal Converter still sets the
+  input and output files.
 - **Copy to clipboard when done** (off by default) puts the results on the
   clipboard as files, ready to paste into Explorer, chat apps or email.
 - **Hardware encoding** uses NVIDIA NVENC, Intel Quick Sync or AMD AMF for
@@ -179,7 +190,8 @@ Settings has four tabs:
   save next to the original or to a folder, hardware encoding, launch at
   login, always on top, the Explorer menu and update checks.
 - **Hotkeys:** the two keys.
-- **Presets:** add, reorder, delete or restore presets, and edit each one.
+- **Presets:** add, reorder, delete or restore presets, import and export
+  them, and edit each one (including its quick key and ffmpeg arguments).
 - **About:** version, whether ffmpeg and LibreOffice were found (with
   **Install** buttons), update check, the Releases page and the config
   folder.
