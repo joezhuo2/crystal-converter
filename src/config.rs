@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::PathBuf};
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Category {
     Image,

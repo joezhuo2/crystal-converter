@@ -52,6 +52,10 @@ fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
     APP.with(|a| a.try_borrow_mut().ok().and_then(|mut a| a.as_mut().map(f)))
 }
 
+pub(crate) fn with_wheel<R>(f: impl FnOnce(&mut Wheel) -> R) -> Option<R> {
+    with_app(|a| f(&mut a.wheel))
+}
+
 pub fn post(host: isize, msg: u32) {
     unsafe {
         let _ = PostMessageW(Some(HWND(host as _)), msg, WPARAM(0), LPARAM(0));
