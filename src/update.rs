@@ -27,24 +27,48 @@ pub fn spawn_check(delay: Duration, done: impl FnOnce() + Send + 'static) {
 
 fn check() -> Status {
     let out = Command::new("curl.exe")
-        .args(["-sfL", "-m", "15", "-H", "User-Agent: crystal-converter", API])
+        .args([
+            "-sL",
+            "-m",
+            "15",
+            "-H",
+            "User-Agent: crystal-converter",
+            "-w",
+            "\n%{http_code}",
+            API,
+        ])
         .stdin(Stdio::null())
         .creation_flags(0x0800_0000)
         .output();
-    let tag = out
+    let Some(text) = out
         .ok()
         .filter(|o| o.status.success())
-        .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    else {
+        return Status::Failed;
+    };
+    let (body, code) = text.rsplit_once('\n').unwrap_or(("", ""));
+    if code.trim() == "404" {
+        return Status::UpToDate;
+    }
+    let tag = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
         .and_then(|v| v["tag_name"].as_str().map(str::to_string));
     match tag {
-        Some(tag) if newer(&tag, env!("CARGO_PKG_VERSION")) => Status::Available(tag.trim_start_matches('v').into()),
+        Some(tag) if newer(&tag, env!("CARGO_PKG_VERSION")) => {
+            Status::Available(tag.trim_start_matches('v').into())
+        }
         Some(_) => Status::UpToDate,
         None => Status::Failed,
     }
 }
 
 fn parse(v: &str) -> Vec<u64> {
-    v.trim_start_matches('v').split(['.', '-']).take(3).map(|p| p.parse().unwrap_or(0)).collect()
+    v.trim_start_matches('v')
+        .split(['.', '-'])
+        .take(3)
+        .map(|p| p.parse().unwrap_or(0))
+        .collect()
 }
 
 pub fn newer(tag: &str, current: &str) -> bool {
