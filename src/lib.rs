@@ -1,10 +1,13 @@
+pub mod app;
 pub mod config;
 pub mod convert;
 pub mod formats;
-
-pub mod app {
-    pub fn run(_files: Vec<std::path::PathBuf>) {}
-}
+pub mod hook;
+pub mod render;
+pub mod sys;
+pub mod tray;
+pub mod update;
+pub mod wheel;
 
 pub mod settings {
     pub fn run() {}
