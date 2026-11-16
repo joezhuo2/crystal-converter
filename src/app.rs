@@ -11,7 +11,9 @@ use std::{
 use windows::{
     core::{w, PCWSTR},
     Win32::{
-        Foundation::{GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{
+            CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM,
+        },
         System::{
             DataExchange::COPYDATASTRUCT, LibraryLoader::GetModuleHandleW, Ole::OleInitialize,
             Threading::CreateMutexW,
@@ -38,6 +40,7 @@ pub const WM_TRAY: u32 = WM_APP + 4;
 pub const WM_JOB: u32 = WM_APP + 5;
 pub const WM_RELOAD: u32 = WM_APP + 6;
 pub const WM_UPDATE: u32 = WM_APP + 7;
+pub const WM_INSTALL: u32 = WM_APP + 30;
 
 const HOTKEY_SELECTION: i32 = 1;
 const HOTKEY_CLIPBOARD: i32 = 2;
@@ -135,7 +138,11 @@ impl App {
                 let host = self.host;
                 update::spawn_check(Duration::ZERO, move || post(host, WM_UPDATE));
             }
-            Action::OpenRelease => sys::open(update::RELEASES),
+            Action::InstallUpdate => {
+                self.tray.set_installing();
+                let host = self.host;
+                update::spawn_install(move || post(host, WM_UPDATE));
+            }
             Action::Reveal(p) => sys::reveal(&p),
             Action::Undo => {
                 sys::recycle(&self.last);
@@ -248,7 +255,14 @@ unsafe extern "system" fn host_proc(
         WM_RELOAD => {
             with_app(App::reload);
         }
+        WM_INSTALL => {
+            with_app(|a| a.tray_action(Action::InstallUpdate));
+        }
         WM_UPDATE => {
+            if update::restart_pending() {
+                unsafe { PostQuitMessage(0) };
+                return LRESULT(0);
+            }
             let status = update::RESULT.lock().unwrap().clone();
             if let Some(s) = status {
                 with_app(|a| a.tray.set_update(&s));
@@ -283,6 +297,7 @@ pub fn run(files: Vec<PathBuf>) {
             forward(&files);
             return;
         }
+        update::cleanup();
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = OleInitialize(None);
         let instance = GetModuleHandleW(None).expect("module handle").into();
@@ -345,5 +360,11 @@ pub fn run(files: Vec<PathBuf>) {
         }
         hook::uninstall();
         APP.with(|a| a.borrow_mut().take());
+        if let Some(exe) = update::take_restart() {
+            if let Ok(m) = _mutex {
+                let _ = CloseHandle(m);
+            }
+            let _ = Command::new(exe).spawn();
+        }
     }
 }
