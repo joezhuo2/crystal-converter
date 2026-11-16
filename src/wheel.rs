@@ -407,6 +407,7 @@ impl Wheel {
                 &ext,
                 convert::soffice().is_some(),
                 &self.config.presets,
+                self.files.len(),
             ),
             None => Vec::new(),
         };

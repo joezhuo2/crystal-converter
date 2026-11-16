@@ -67,6 +67,9 @@ pub struct Preset {
     pub mono: bool,
     pub mute: bool,
     pub strip_metadata: bool,
+    pub trim_start: f32,
+    pub trim_end: f32,
+    pub op: String,
 }
 
 impl Default for Preset {
@@ -89,6 +92,9 @@ impl Default for Preset {
             mono: false,
             mute: false,
             strip_metadata: false,
+            trim_start: 0.0,
+            trim_end: 0.0,
+            op: String::new(),
         }
     }
 }
