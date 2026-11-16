@@ -59,9 +59,14 @@ lives in the tray.
 
 The app checks GitHub 30 seconds after it starts (turn this off under
 Settings > General). The tray menu then reads **Up to date (vX.Y.Z)** or
-**Update found (vX.Y.Z)**; click the update item to open the release page.
-**Check for updates** in the tray or Settings > About checks right away.
-Nothing downloads or installs on its own.
+**Install update (vX.Y.Z)**. **Check for updates** in the tray or
+Settings > About checks right away. Nothing downloads or installs on its own:
+click the tray item or **Install update** in Settings > About and the app
+downloads the new exe from the release, checks its size, that it is a Windows
+program and its SHA-256 when GitHub publishes one, swaps it in beside the
+old one (kept as `.old` until the next start) and restarts. If the folder is
+not writable or anything fails, the old exe keeps working, a message says why
+and the release page opens.
 
 ## How it works
 
@@ -112,7 +117,7 @@ number, so nothing is overwritten.
   **Convert with Crystal Converter** (under Show more options on Windows 11)
   to open the wheel without dragging.
 - **Tray icon.** Click it for Settings. Right-click for **Check for updates**,
-  the update status, **Recent** conversions (click one to show it in
+  the update status (click it to install), **Recent** conversions (click one to show it in
   Explorer), **Undo last conversion** (moves the new files to the Recycle
   Bin), **Open settings**, **Launch at login**, **Always on top** and
   **Quit**.

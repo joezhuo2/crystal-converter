@@ -14,7 +14,7 @@ pub static QUEUE: Mutex<Vec<TrayMsg>> = Mutex::new(Vec::new());
 
 pub enum Action {
     CheckUpdates,
-    OpenRelease,
+    InstallUpdate,
     Reveal(PathBuf),
     Undo,
     Settings,
@@ -111,7 +111,7 @@ impl Tray {
         if id == self.check.id() {
             Some(Action::CheckUpdates)
         } else if id == self.status.id() {
-            Some(Action::OpenRelease)
+            Some(Action::InstallUpdate)
         } else if id == self.undo.id() {
             Some(Action::Undo)
         } else if id == self.settings.id() {
@@ -140,11 +140,16 @@ impl Tray {
         self.status.set_enabled(false);
     }
 
+    pub fn set_installing(&self) {
+        self.status.set_text("Installing update...");
+        self.status.set_enabled(false);
+    }
+
     pub fn set_update(&self, status: &update::Status) {
         let version = env!("CARGO_PKG_VERSION");
         let (text, enabled) = match status {
             update::Status::UpToDate => (format!("Up to date (v{version})"), false),
-            update::Status::Available(v) => (format!("Update found (v{v})"), true),
+            update::Status::Available(v) => (format!("Install update (v{v})"), true),
             update::Status::Failed => (format!("Couldn't check (v{version})"), false),
         };
         self.status.set_text(text);
