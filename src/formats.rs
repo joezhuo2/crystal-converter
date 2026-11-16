@@ -1,7 +1,7 @@
 use crate::config::{Category, Preset, WheelKind};
 use std::{fs::File, io::Read, path::Path};
 
-pub const MAX_SLICES: usize = 10;
+pub const MAX_SLICES: usize = 16;
 
 const IMAGE: &[&str] = &[
     "png", "jpg", "webp", "avif", "gif", "bmp", "tiff", "ico", "heic", "heif", "svg", "tga",
@@ -97,7 +97,7 @@ pub fn targets(category: Category, ext: &str, office: bool) -> Vec<&'static str>
         Category::Image if ext == "gif" => &["mp4", "webm", "webp", "png", "jpg"],
         Category::Image => &["png", "jpg", "webp", "avif", "gif", "ico", "bmp", "pdf"],
         Category::Video => &["mp4", "webm", "mov", "mkv", "avi", "gif", "mp3", "m4a"],
-        Category::Audio => &["mp3", "wav", "flac", "opus", "ogg", "m4a"],
+        Category::Audio => &["mp3", "wav", "flac", "opus", "ogg", "m4a", "m4r"],
         Category::Document if ext == "pdf" && office => &["png", "jpg", "docx"],
         Category::Document if ext == "pdf" => &["png", "jpg"],
         Category::Document if !office => &[],
@@ -201,6 +201,63 @@ fn modify_builtins(category: Category) -> Vec<Preset> {
     }
 }
 
+fn extra_slices(kind: WheelKind, category: Category, ext: &str) -> Vec<Preset> {
+    let p = |name: &str| Preset::named(name, category);
+    let mut v = Vec::new();
+    match (kind, category) {
+        (WheelKind::Convert, Category::Image) => v.push(Preset {
+            format: "ico".into(),
+            favicon: true,
+            wheel: WheelKind::Convert,
+            ..p("Favicon")
+        }),
+        (WheelKind::Modify, Category::Image) => {
+            for ratio in ["1:1", "4:3", "16:9", "9:16"] {
+                v.push(Preset {
+                    crop: ratio.into(),
+                    ..p(&format!("Crop {ratio}"))
+                });
+            }
+            v.push(Preset {
+                grayscale: true,
+                ..p("Grayscale")
+            });
+            if matches!(ext, "jpg" | "png" | "webp") {
+                v.push(Preset {
+                    strip_gps: true,
+                    ..p("No GPS")
+                });
+            }
+            if ext == "png" {
+                v.push(Preset {
+                    lossless: true,
+                    ..p("Lossless")
+                });
+            }
+        }
+        (WheelKind::Modify, Category::Audio) => v.extend([
+            Preset {
+                fade_s: 2.0,
+                ..p("Fade 2 s")
+            },
+            Preset {
+                speed: 0.75,
+                ..p("Speed 0.75x")
+            },
+            Preset {
+                speed: 1.5,
+                ..p("Speed 1.5x")
+            },
+            Preset {
+                cut_len: 30.0,
+                ..p("First 30 s")
+            },
+        ]),
+        _ => {}
+    }
+    v
+}
+
 pub fn slices(
     kind: WheelKind,
     category: Category,
@@ -215,6 +272,7 @@ pub fn slices(
             .collect(),
         WheelKind::Modify => modify_builtins(category),
     };
+    out.extend(extra_slices(kind, category, ext));
     out.extend(
         presets
             .iter()

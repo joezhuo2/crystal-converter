@@ -65,6 +65,15 @@ pub struct Preset {
     pub mono: bool,
     pub mute: bool,
     pub strip_metadata: bool,
+    pub crop: String,
+    pub grayscale: bool,
+    pub favicon: bool,
+    pub lossless: bool,
+    pub strip_gps: bool,
+    pub fade_s: f32,
+    pub speed: f32,
+    pub cut_start: f32,
+    pub cut_len: f32,
 }
 
 impl Default for Preset {
@@ -87,6 +96,15 @@ impl Default for Preset {
             mono: false,
             mute: false,
             strip_metadata: false,
+            crop: String::new(),
+            grayscale: false,
+            favicon: false,
+            lossless: false,
+            strip_gps: false,
+            fade_s: 0.0,
+            speed: 1.0,
+            cut_start: 0.0,
+            cut_len: 0.0,
         }
     }
 }
