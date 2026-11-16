@@ -259,6 +259,28 @@ Notes on the image and audio slices:
 - **M4R** makes an iPhone ringtone (AAC in an MP4 container) cut to 40 s,
   the longest iOS accepts for ringtones.
 
+### Optional tools
+
+Three more slices need a tool that isn't bundled. They always show, and
+choosing one without its tool says what's missing.
+
+| Slice | Wheel | Tool | Licence |
+|---|---|---|---|
+| PDF Screen, Ebook, Printer (compress) | Modify, on a PDF | [Ghostscript](https://ghostscript.com) | AGPL-3.0 |
+| SRT (speech to subtitles) | Convert, on audio and video | [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and a ggml model | MIT |
+| No background (PNG with transparency) | Modify, on an image | [rembg](https://github.com/danielgatis/rembg) | MIT |
+
+Settings > Tools shows whether each one was found and where. whisper.cpp and
+its model (tiny, base, small or medium; base by default) download from the
+official GitHub release and Hugging Face repository into
+`%APPDATA%\crystal-converter\tools` when you click **Download**, and are
+checked against a pinned size and SHA-256 first. Ghostscript has an installer
+and rembg is a Python package, so those buttons open the official page, or run
+`winget` / `pip` in a visible console after you confirm. The app also finds
+them on `PATH` or in their usual install folders. rembg downloads its own
+image model the first time it runs. Subtitle language is detected
+automatically.
+
 ## Settings and keys
 
 | Key | Does |
@@ -275,7 +297,7 @@ open Settings > Hotkeys, click the key and press a new one; a reset button
 appears next to a key that isn't the default. Shift, Ctrl, Alt and Win can't
 be used because they change what a drag does (copy, move or shortcut).
 
-Settings has four tabs:
+Settings has five tabs:
 
 - **General:** how long Done stays up, sounds, copy to clipboard when done,
   save next to the original or to a folder, hardware encoding, parallel
@@ -289,6 +311,8 @@ Settings has four tabs:
 - **Hotkeys:** the two keys.
 - **Presets:** add, reorder, delete or restore presets, import and export
   them, and edit each one (including its quick key and ffmpeg arguments).
+- **Tools:** whether Ghostscript, whisper.cpp and rembg were found, with
+  download or install buttons and the Whisper model size.
 - **About:** version, whether ffmpeg and LibreOffice were found (with
   **Install** buttons), update check, the Releases page and the config
   folder.
@@ -369,6 +393,7 @@ cargo run --release --example render_frames -- target/frames
 | `src/formats.rs` | File type detection, targets and built-in slices |
 | `src/archive.rs`, `src/pdfmerge.rs`, `src/markdown.rs`, `src/ocr.rs` | tar zip and extract, PDF merging, Markdown to HTML, Windows OCR |
 | `src/settings.rs` | egui settings window and its animated widgets |
+| `src/tools.rs` | Optional tool lookup, argument builders, verified downloads |
 | `src/tray.rs`, `src/update.rs`, `src/sys.rs` | Tray menu, update check, registry, clipboard, sounds |
 
 Pushing a `v*` tag runs the [release workflow](.github/workflows/release.yml),

@@ -296,6 +296,29 @@ fn extra_slices(kind: WheelKind, category: Category, ext: &str) -> Vec<Preset> {
     v
 }
 
+fn tool_slices(kind: WheelKind, category: Category, ext: &str) -> Vec<Preset> {
+    match (kind, category) {
+        (WheelKind::Convert, Category::Audio) => {
+            vec![Preset::convert_to("srt")]
+        }
+        (WheelKind::Modify, Category::Document) if ext == "pdf" => {
+            [("Screen", 72), ("Ebook", 150), ("Printer", 300)]
+                .into_iter()
+                .map(|(name, dpi)| Preset {
+                    format: "pdf".into(),
+                    quality: dpi,
+                    ..Preset::named(name, category)
+                })
+                .collect()
+        }
+        (WheelKind::Modify, Category::Image) if ext != "gif" => vec![Preset {
+            format: "nobg".into(),
+            ..Preset::named("No background", category)
+        }],
+        _ => Vec::new(),
+    }
+}
+
 pub fn slices(
     kind: WheelKind,
     category: Category,
@@ -328,6 +351,7 @@ pub fn slices(
         }
     }
     out.extend(extra_slices(kind, category, ext));
+    out.extend(tool_slices(kind, category, ext));
     out.extend(
         presets
             .iter()
@@ -424,5 +448,18 @@ mod tests {
             2,
         );
         assert!(images.iter().any(|p| p.op == "slideshow"));
+    }
+
+    #[test]
+    fn tool_slices_follow_file_type() {
+        let pdf = slices(WheelKind::Modify, Category::Document, "pdf", false, &[], 1);
+        assert_eq!(pdf.len(), 3);
+        assert!(pdf.iter().all(|p| p.format == "pdf"));
+        let img = slices(WheelKind::Modify, Category::Image, "jpg", false, &[], 1);
+        assert!(img.iter().any(|p| p.format == "nobg"));
+        let gif = slices(WheelKind::Modify, Category::Image, "gif", false, &[], 1);
+        assert!(!gif.iter().any(|p| p.format == "nobg"));
+        let audio = slices(WheelKind::Convert, Category::Audio, "mp3", false, &[], 1);
+        assert_eq!(audio.last().map(|p| p.format.as_str()), Some("srt"));
     }
 }
