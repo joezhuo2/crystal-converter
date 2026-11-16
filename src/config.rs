@@ -125,6 +125,8 @@ pub struct Config {
     pub output_mode: OutputMode,
     pub output_folder: String,
     pub hardware_encoding: bool,
+    pub parallel_jobs: u32,
+    pub replace_original: bool,
     pub launch_at_login: bool,
     pub always_on_top: bool,
     pub context_menu: bool,
@@ -143,6 +145,9 @@ impl Default for Config {
             output_mode: OutputMode::NextToOriginal,
             output_folder: String::new(),
             hardware_encoding: true,
+            parallel_jobs: std::thread::available_parallelism().map_or(2, |n| n.get().min(4))
+                as u32,
+            replace_original: false,
             launch_at_login: false,
             always_on_top: true,
             context_menu: false,

@@ -7,14 +7,14 @@ use crate::{
     sys::{self, Sound},
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     ffi::OsString,
     os::windows::ffi::OsStringExt,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{channel, Receiver},
-        Arc,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -59,6 +59,7 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 const OPEN_S: f32 = 0.22;
 const CLOSE_S: f32 = 0.18;
 const MORPH_S: f32 = 0.34;
+const TOAST_AFTER: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Phase {
@@ -178,6 +179,23 @@ struct Running {
     cancel: Arc<AtomicBool>,
 }
 
+#[derive(Default)]
+struct Batch {
+    queue: VecDeque<Job>,
+    chain_at: Option<Instant>,
+    job_at: Option<Instant>,
+    total: usize,
+    failed: Vec<String>,
+    outputs: Vec<PathBuf>,
+    stats: String,
+}
+
+struct Meta {
+    size: u64,
+    info: convert::Info,
+    dims: Option<(u32, u32)>,
+}
+
 pub struct Wheel {
     host: isize,
     catcher: Option<Catcher>,
@@ -195,6 +213,10 @@ pub struct Wheel {
     opened: Instant,
     last_tick: Instant,
     job: Option<Running>,
+    batch: Batch,
+    error: String,
+    meta: Option<(PathBuf, Arc<Mutex<Option<Meta>>>)>,
+    est_shown: Option<String>,
     status: Status,
     status_at: Instant,
     morph_at: Option<Instant>,
@@ -228,6 +250,10 @@ impl Wheel {
             opened: now,
             last_tick: now,
             job: None,
+            batch: Batch::default(),
+            error: String::new(),
+            meta: None,
+            est_shown: None,
             status: Status::Preparing,
             status_at: now,
             morph_at: None,
@@ -247,11 +273,30 @@ impl Wheel {
     }
 
     pub fn show(&mut self, kind: WheelKind, config: &Config) {
-        if self.busy() {
+        let running = self.phase == Phase::Status && self.job.is_some();
+        if self.busy() && !running {
             return;
         }
         let host = HWND(self.host as _);
+        let keep = running.then(|| {
+            (
+                self.job.take(),
+                std::mem::take(&mut self.batch),
+                self.status,
+                self.status_at,
+                std::mem::take(&mut self.status_title),
+                std::mem::take(&mut self.status_sub),
+            )
+        });
         *self = Self::new(host);
+        if let Some((job, batch, status, at, title, sub)) = keep {
+            self.job = job;
+            self.batch = batch;
+            self.status = status;
+            self.status_at = at;
+            self.status_title = title;
+            self.status_sub = sub;
+        }
         self.kind = kind;
         self.config = config.clone();
         self.phase = Phase::Drag;
@@ -301,9 +346,18 @@ impl Wheel {
         if matches!(self.phase, Phase::Hidden | Phase::Closing) {
             return;
         }
+        if self.job.is_some() && matches!(self.phase, Phase::Drag | Phase::Selecting) {
+            self.phase = Phase::Status;
+            self.morph_at = Some(Instant::now());
+            self.catcher = None;
+            self.hover = Hit::None;
+            self.dirty = true;
+            return;
+        }
         if let Some(job) = &self.job {
             job.cancel.store(true, Ordering::Relaxed);
         }
+        self.batch.queue.clear();
         self.phase = Phase::Closing;
         self.closing_at = Some(Instant::now());
         self.catcher = None;
@@ -358,6 +412,27 @@ impl Wheel {
         };
         self.slice_hover = vec![0.0; self.slices.len()];
         self.slices_at = Some(Instant::now());
+        let first = self.files.first().cloned();
+        if self.meta.as_ref().map(|m| &m.0) != first.as_ref() {
+            self.meta = first
+                .filter(|_| {
+                    matches!(
+                        category,
+                        Some(Category::Image | Category::Video | Category::Audio)
+                    )
+                })
+                .map(|path| {
+                    let slot = Arc::new(Mutex::new(None));
+                    let (out, file) = (slot.clone(), path.clone());
+                    std::thread::spawn(move || {
+                        if let Ok((info, dims)) = convert::probe_meta(&file) {
+                            let size = std::fs::metadata(&file).map_or(0, |m| m.len());
+                            *out.lock().unwrap() = Some(Meta { size, info, dims });
+                        }
+                    });
+                    (path, slot)
+                });
+        }
     }
 
     fn local(&self, x: i32, y: i32) -> (f32, f32) {
@@ -489,7 +564,24 @@ impl Wheel {
                     _ => self.close(),
                 }
             }
-            Phase::Status if self.status == Status::Error => self.close(),
+            Phase::Status if self.status == Status::Error => {
+                let scale = self.win.as_ref().map_or(1.0, |w| w.scale);
+                match render::hit_button(scale, x, y) {
+                    Hit::Button(0) => {
+                        if let Some(w) = &self.win {
+                            if sys::copy_text(w.hwnd, &self.error) {
+                                self.status_sub = "Copied error".into();
+                                self.close_at = Some(Instant::now() + Duration::from_millis(900));
+                            }
+                        }
+                    }
+                    Hit::Button(_) => {
+                        sys::open(&log_path().to_string_lossy());
+                        self.close();
+                    }
+                    _ => self.close(),
+                }
+            }
             _ => {}
         }
     }
@@ -500,19 +592,22 @@ impl Wheel {
             return;
         };
         let now = Instant::now();
+        let running = self.job.is_some();
         self.catcher = None;
         self.phase = Phase::Status;
-        self.status = Status::Preparing;
-        self.status_at = now;
         self.morph_at = Some(now);
         self.hover = Hit::None;
-        self.status_title = "Preparing".into();
-        self.status_sub = match self.files.len() {
-            1 => convert::file_name(&self.files[0]),
-            n => format!("{n} files"),
-        };
-        if self.config.sounds {
-            sys::play(Sound::Start);
+        if !running {
+            self.status = Status::Preparing;
+            self.status_at = now;
+            self.status_title = "Preparing".into();
+            self.status_sub = match self.files.len() {
+                1 => convert::file_name(&self.files[0]),
+                n => format!("{n} files"),
+            };
+            if self.config.sounds {
+                sys::play(Sound::Start);
+            }
         }
         if !self.config.always_on_top {
             if let Some(w) = &self.win {
@@ -537,18 +632,123 @@ impl Wheel {
             preset,
             out_dir,
             hardware: self.config.hardware_encoding,
+            parallel: self.config.parallel_jobs as usize,
+            replace_original: self.config.replace_original,
         };
+        if running {
+            self.batch.queue.push_back(job);
+            self.status_title = self.title();
+        } else {
+            self.spawn(job);
+        }
+    }
+
+    fn title(&self) -> String {
+        let base = if matches!(self.status, Status::Converting(_)) {
+            "Converting"
+        } else {
+            "Preparing"
+        };
+        match self.batch.queue.len() {
+            0 => base.into(),
+            n => format!("{base} · {n} waiting"),
+        }
+    }
+
+    fn spawn(&mut self, job: Job) {
+        let now = Instant::now();
+        self.batch.chain_at.get_or_insert(now);
+        self.batch.job_at = Some(now);
+        self.batch.stats.clear();
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
         let host = self.host;
         std::thread::spawn(move || {
+            let _awake = sys::keep_awake();
             convert::run(job, &flag, &mut |e| {
                 let _ = tx.send(e);
                 app::post(host, app::WM_JOB);
             })
         });
         self.job = Some(Running { rx, cancel });
+    }
+
+    fn advance(&mut self) -> Option<Vec<PathBuf>> {
+        if let Some(job) = self.batch.queue.pop_front() {
+            self.status = Status::Preparing;
+            self.spawn(job);
+            self.status_title = self.title();
+            return None;
+        }
+        self.finish()
+    }
+
+    fn finish(&mut self) -> Option<Vec<PathBuf>> {
+        let batch = std::mem::take(&mut self.batch);
+        self.job = None;
+        let now = Instant::now();
+        let long = batch.chain_at.is_some_and(|t| t.elapsed() >= TOAST_AFTER);
+        let notify = long && (self.phase != Phase::Status || !self.config.always_on_top);
+        let failed = batch.failed.len();
+        let message = batch.failed.join("\n");
+        if !message.is_empty() {
+            log_error(&message);
+            self.error = message.clone();
+        }
+        let delay = u64::from(self.config.close_delay_ms);
+        if batch.outputs.is_empty() {
+            self.status = Status::Error;
+            self.status_at = now;
+            self.status_title = if failed > 1 {
+                format!("0 of {failed} done, {failed} failed")
+            } else {
+                "Failed".into()
+            };
+            self.status_sub = message.lines().next().unwrap_or("").to_string();
+            if self.config.sounds {
+                sys::play(Sound::Error);
+            }
+            self.close_at = Some(now + Duration::from_millis(delay.max(4000)));
+            if notify {
+                sys::toast(&self.status_title, &self.status_sub);
+            }
+            return None;
+        }
+        self.status = Status::Done;
+        self.status_at = now;
+        self.status_title = if failed == 0 {
+            "Done".into()
+        } else {
+            format!(
+                "{} of {} done, {failed} failed",
+                batch.total.saturating_sub(failed),
+                batch.total
+            )
+        };
+        self.status_sub = match batch.outputs.len() {
+            1 => convert::file_name(&batch.outputs[0]),
+            n => format!("{n} files"),
+        };
+        if self.config.copy_to_clipboard {
+            if let Some(w) = &self.win {
+                if sys::copy_files(w.hwnd, &batch.outputs) {
+                    self.status_sub = format!("{} · copied", self.status_sub);
+                }
+            }
+        }
+        if self.config.sounds {
+            sys::play(Sound::Done);
+        }
+        let settle = self.morph_at.map_or(Duration::ZERO, |m| {
+            Duration::from_secs_f32(MORPH_S).saturating_sub(m.elapsed())
+        });
+        self.close_at = Some(now + settle + Duration::from_millis(delay));
+        if notify {
+            sys::toast(&self.status_title, &self.status_sub);
+        }
+        self.outputs = batch.outputs.clone();
+        Some(batch.outputs)
     }
 
     pub fn on_job(&mut self, _config: &Config) -> Option<Vec<PathBuf>> {
@@ -560,7 +760,7 @@ impl Wheel {
             .unwrap_or_default();
         let mut finished = None;
         for event in events {
-            if self.phase != Phase::Status {
+            if matches!(self.phase, Phase::Hidden | Phase::Closing) {
                 break;
             }
             match event {
@@ -569,72 +769,41 @@ impl Wheel {
                     total,
                     fraction,
                     name,
+                    speed,
                 } => {
                     self.status = Status::Converting(fraction);
-                    self.status_title = "Converting".into();
+                    self.status_title = self.title();
+                    self.batch.stats = self
+                        .batch
+                        .job_at
+                        .map_or_else(String::new, |t| stats_line(t.elapsed(), fraction, speed));
                     self.status_sub = if total > 1 {
                         format!("{} of {total} · {name}", index + 1)
                     } else {
                         name
                     };
                 }
-                Event::Done { outputs, failed } => {
-                    let now = Instant::now();
-                    self.status = Status::Done;
-                    self.status_at = now;
-                    self.status_title = if failed.is_empty() {
-                        "Done".into()
-                    } else {
-                        format!("Done · {} failed", failed.len())
-                    };
-                    self.status_sub = match outputs.len() {
-                        1 => convert::file_name(&outputs[0]),
-                        n => format!("{n} files"),
-                    };
-                    if !failed.is_empty() {
-                        log_error(&failed.join("\n"));
-                    }
-                    if self.config.copy_to_clipboard {
-                        if let Some(w) = &self.win {
-                            if sys::copy_files(w.hwnd, &outputs) {
-                                self.status_sub = format!("{} · copied", self.status_sub);
-                            }
-                        }
-                    }
-                    if self.config.sounds {
-                        sys::play(Sound::Done);
-                    }
-                    let settle = self.morph_at.map_or(Duration::ZERO, |m| {
-                        Duration::from_secs_f32(MORPH_S).saturating_sub(m.elapsed())
-                    });
-                    self.close_at = Some(
-                        now + settle + Duration::from_millis(u64::from(self.config.close_delay_ms)),
-                    );
-                    self.outputs = outputs.clone();
-                    self.job = None;
-                    finished = Some(outputs);
+                Event::Done {
+                    outputs,
+                    failed,
+                    total,
+                } => {
+                    self.batch.total += total;
+                    self.batch.failed.extend(failed);
+                    self.batch.outputs.extend(outputs);
+                    finished = self.advance();
                     break;
                 }
                 Event::Failed(msg) => {
-                    log_error(&msg);
-                    self.status = Status::Error;
-                    self.status_at = Instant::now();
-                    self.status_title = "Failed".into();
-                    self.status_sub = msg.lines().next().unwrap_or("").to_string();
-                    if self.config.sounds {
-                        sys::play(Sound::Error);
-                    }
-                    self.close_at = Some(
-                        Instant::now()
-                            + Duration::from_millis(u64::from(
-                                self.config.close_delay_ms.max(4000),
-                            )),
-                    );
-                    self.job = None;
+                    let lines: Vec<String> = msg.lines().map(String::from).collect();
+                    self.batch.total += lines.len();
+                    self.batch.failed.extend(lines);
+                    finished = self.advance();
                     break;
                 }
                 Event::Cancelled => {
                     self.job = None;
+                    self.batch = Batch::default();
                     self.close();
                     break;
                 }
@@ -730,6 +899,19 @@ impl Wheel {
             ),
             (_, Some(c)) => (c.label().to_string(), file_summary(&self.files)),
         };
+        let estimate = match self.hover {
+            Hit::Slice(i) if self.files.len() == 1 => self.slices.get(i).and_then(|p| {
+                let slot = self.meta.as_ref()?.1.lock().ok()?;
+                let m = slot.as_ref()?;
+                convert::estimate(p, m.size, &m.info, m.dims)
+            }),
+            _ => None,
+        };
+        if estimate != self.est_shown {
+            self.est_shown.clone_from(&estimate);
+            self.dirty = true;
+        }
+        let subtitle = estimate.unwrap_or(subtitle);
         let morph = self.morph_at.map_or(0.0, |t| {
             render::ease_in_out_cubic(t.elapsed().as_secs_f32() / MORPH_S)
         });
@@ -738,13 +920,20 @@ impl Wheel {
         } else {
             render::MODIFY_ACCENT
         };
+        let tips = if self.status == Status::Error {
+            render::ERROR_TIPS
+        } else {
+            render::BUTTON_TIPS
+        };
         let tooltip = match self.hover {
-            Hit::Button(i) if self.status == Status::Done => Some((i, render::BUTTON_TIPS[i])),
+            Hit::Button(i) if matches!(self.status, Status::Done | Status::Error) => {
+                Some((i, tips[i]))
+            }
             _ => self
                 .button_hover
                 .iter()
                 .position(|h| *h > 0.02)
-                .map(|i| (i, render::BUTTON_TIPS[i])),
+                .map(|i| (i, tips[i])),
         };
         let status_t = self.status_at.elapsed().as_secs_f32();
         let animating = moving
@@ -788,6 +977,7 @@ impl Wheel {
             time: self.opened.elapsed().as_secs_f32(),
             button_hover: self.button_hover,
             tooltip,
+            stats: &self.batch.stats,
         };
         let base = win.base[usize::from(morph >= 1.0)].as_ref();
         render::draw(&mut win.pixmap, &scene, &win.fonts, base);
@@ -822,9 +1012,50 @@ fn expand(files: Vec<PathBuf>) -> Vec<PathBuf> {
     out
 }
 
+fn log_path() -> PathBuf {
+    crate::config::dir().join("last-error.txt")
+}
+
 fn log_error(msg: &str) {
     let _ = std::fs::create_dir_all(crate::config::dir());
-    let _ = std::fs::write(crate::config::dir().join("last-error.txt"), msg);
+    let _ = std::fs::write(log_path(), msg);
+}
+
+fn clock(secs: f32) -> String {
+    let s = secs.round() as u32;
+    if s >= 3600 {
+        format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
+    } else {
+        format!("{}:{:02}", s / 60, s % 60)
+    }
+}
+
+fn stats_line(elapsed: Duration, fraction: Option<f32>, speed: Option<f32>) -> String {
+    let mut parts = Vec::new();
+    if let Some(f) = fraction.filter(|f| *f > 0.02 && elapsed.as_secs() >= 2) {
+        parts.push(format!(
+            "{} left",
+            clock(elapsed.as_secs_f32() * (1.0 - f) / f)
+        ));
+    }
+    if let Some(x) = speed {
+        parts.push(format!("{x:.1}x"));
+    }
+    parts.join(" · ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_eta_and_speed() {
+        let s = Duration::from_secs(10);
+        assert_eq!(stats_line(s, Some(0.25), Some(1.84)), "0:30 left · 1.8x");
+        assert_eq!(stats_line(s, Some(0.01), None), "");
+        assert_eq!(stats_line(Duration::from_secs(1), Some(0.5), None), "");
+        assert_eq!(clock(3725.0), "1:02:05");
+    }
 }
 
 impl Window {
