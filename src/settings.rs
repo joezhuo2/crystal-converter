@@ -1469,6 +1469,21 @@ impl SettingsApp {
                     ctx.request_repaint();
                 });
             }
+            let available = matches!(
+                self.update.lock().unwrap().as_ref(),
+                Some(update::Status::Available(_))
+            );
+            if available
+                && self
+                    .feedback
+                    .button(ui, "install", Icon::Download, "Install update")
+            {
+                match app::find_host() {
+                    Some(host) => app::post(host.0 as isize, app::WM_INSTALL),
+                    None => sys::open(update::RELEASES),
+                }
+                self.feedback.set("install", Fb::Done, now);
+            }
             if self.feedback.button(ui, "release", Icon::Link, "Releases") {
                 sys::open(update::RELEASES);
                 self.feedback.set("release", Fb::Done, now);
@@ -1492,7 +1507,9 @@ impl SettingsApp {
                 let text = match status {
                     update::Status::UpToDate => "You're on the latest version.".to_string(),
                     update::Status::Available(v) => {
-                        format!("Version {v} is available on the Releases page.")
+                        format!(
+                            "Version {v} is available. Install it to restart into the new version."
+                        )
                     }
                     update::Status::Failed => "Couldn't reach GitHub.".to_string(),
                 };
