@@ -130,11 +130,12 @@ The Convert wheel leaves out the format the file already has.
 |---|---|
 | Image (PNG, JPG, WebP, AVIF, BMP, TIFF, ICO, HEIC, SVG, TGA) | PNG, JPG, WebP, AVIF, GIF, ICO, BMP, PDF |
 | Animated GIF | MP4, WebM, WebP, PNG, JPG |
-| Video (MP4, MOV, MKV, WebM, AVI, WMV, FLV, MPG, TS, 3GP) | MP4, WebM, MOV, MKV, AVI, GIF, MP3, M4A |
+| Video (MP4, MOV, MKV, WebM, AVI, WMV, FLV, MPG, TS, 3GP) | MP4, WebM, MOV, MKV, AVI, GIF, WebP (animated), MP3, M4A, SRT (subtitles) |
 | Audio (MP3, WAV, FLAC, OGG, Opus, M4A, AAC, WMA, AIFF) | MP3, WAV, FLAC, Opus, OGG, M4A |
 | Document (DOC, DOCX, ODT, RTF, TXT, HTML) | PDF, DOCX, ODT, TXT, HTML |
 | Spreadsheet or slides (XLS, XLSX, ODS, CSV, PPT, PPTX, ODP) | PDF |
 | PDF | PNG, JPG (one image per page), DOCX |
+| Several images | also **Slideshow**: one MP4, 3 seconds per image, in drop order |
 
 PDF pages are rendered by Windows itself at twice their size. Everything
 else in the Documents rows, and PDF to DOCX, needs
@@ -148,14 +149,24 @@ background.
 | File | Built-in slices |
 |---|---|
 | Image | Quality 75, 50%, 1920 px, 1080 px, No metadata, Rotate |
-| Video | 8 MB, 25 MB, 50 MB, 1080p, 720p, 30 fps, Mute, Rotate |
+| Video | 8 MB, 25 MB, 50 MB, 1080p, 720p, 30 fps, Mute, Rotate, First 30 s, 2x speed, HDR to SDR, Thumbnail, Contact sheet |
 | Audio | +6 dB, -6 dB, Normalize (−14 LUFS), Trim silence, Mono, 128 kbps |
 
 Size targets work out a bitrate from the length of the file. A file that's
 already under the target is re-encoded at normal quality instead. Presets can
 combine any of: output format, max size, longest edge, scale, quality, audio
 bitrate, frame rate, volume, rotation, loudness normalization, silence
-trimming, mono, mute and stripping metadata. A wheel shows up to 10 slices.
+trimming, mono, mute, stripping metadata and a trim start and end in seconds
+(for example, a preset with start 10 and end 40 keeps that 30 second piece).
+A wheel shows up to 16 slices.
+
+Dropping several videos or several audio files adds a **Join** slice that
+glues them together in drop order. Files with the same codecs and settings are
+copied without re-encoding, anything else is re-encoded. Thumbnail saves one
+frame as a JPG, Contact sheet a 4x3 grid of frames. HDR to SDR tone-maps
+phone clips with zscale when your ffmpeg has it, and falls back to simpler
+filters when it doesn't. SRT needs a text subtitle stream and says so if the
+file has none.
 
 ## Settings and keys
 
