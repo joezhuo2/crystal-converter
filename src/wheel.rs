@@ -76,6 +76,7 @@ struct Window {
     old: HGDIOBJ,
     bits: *mut u8,
     pixmap: Pixmap,
+    base: [Option<Pixmap>; 2],
     fonts: Fonts,
     scale: f32,
     pos: POINT,
@@ -127,6 +128,7 @@ pub struct Wheel {
     inside: bool,
     close_at: Option<Instant>,
     closing_at: Option<Instant>,
+    dirty: bool,
 }
 
 impl Wheel {
@@ -158,6 +160,7 @@ impl Wheel {
             inside: false,
             close_at: None,
             closing_at: None,
+            dirty: true,
         }
     }
 
@@ -226,6 +229,7 @@ impl Wheel {
     }
 
     fn set_files(&mut self, files: Vec<PathBuf>) {
+        self.dirty = true;
         let files = expand(files);
         let mut counts: HashMap<Category, usize> = HashMap::new();
         let detected: Vec<(PathBuf, Option<Category>)> = files
@@ -298,6 +302,7 @@ impl Wheel {
     }
 
     fn drag_leave(&mut self) {
+        self.dirty = true;
         self.hover = Hit::None;
     }
 
@@ -350,6 +355,7 @@ impl Wheel {
     }
 
     fn mouse_leave(&mut self) {
+        self.dirty = true;
         if let Some(w) = &mut self.win {
             w.tracking = false;
         }
@@ -365,6 +371,7 @@ impl Wheel {
     }
 
     fn click(&mut self, x: f32, y: f32) {
+        self.dirty = true;
         match self.phase {
             Phase::Selecting => match self.hit(x, y) {
                 Hit::Slice(i) => self.start(i),
@@ -397,6 +404,7 @@ impl Wheel {
     }
 
     fn start(&mut self, index: usize) {
+        self.dirty = true;
         let Some(preset) = self.slices.get(index).cloned() else {
             return;
         };
@@ -452,6 +460,7 @@ impl Wheel {
     }
 
     pub fn on_job(&mut self, _config: &Config) -> Option<Vec<PathBuf>> {
+        self.dirty = true;
         let events: Vec<Event> = self
             .job
             .as_ref()
@@ -546,7 +555,16 @@ impl Wheel {
         let now = Instant::now();
         let dt = now.duration_since(self.last_tick).as_secs_f32().min(0.1);
         self.last_tick = now;
-        let follow = (dt * 16.0).min(1.0);
+        let follow = 1.0 - (-dt * 30.0).exp();
+        let mut moving = false;
+        let mut ease = |h: &mut f32, target: f32| {
+            *h += (target - *h) * follow;
+            if (target - *h).abs() < 0.004 {
+                *h = target;
+            } else {
+                moving = true;
+            }
+        };
 
         let open = match (self.phase, self.closing_at) {
             (Phase::Closing, Some(at)) => {
@@ -573,17 +591,17 @@ impl Wheel {
             } else {
                 0.0
             };
-            *h += (target - *h) * follow;
+            ease(h, target);
         }
         let target = if self.hover == Hit::Center { 1.0 } else { 0.0 };
-        self.center_hover += (target - self.center_hover) * follow;
+        ease(&mut self.center_hover, target);
         for (i, h) in self.button_hover.iter_mut().enumerate() {
             let target = if self.hover == Hit::Button(i) {
                 1.0
             } else {
                 0.0
             };
-            *h += (target - *h) * follow;
+            ease(h, target);
         }
 
         let since_slices = self.slices_at.map_or(0.0, |t| t.elapsed().as_secs_f32());
@@ -634,6 +652,20 @@ impl Wheel {
                 .position(|h| *h > 0.02)
                 .map(|i| (i, render::BUTTON_TIPS[i])),
         };
+        let status_t = self.status_at.elapsed().as_secs_f32();
+        let animating = moving
+            || self.dirty
+            || open < 1.0
+            || self.phase == Phase::Closing
+            || (morph > 0.0 && morph < 1.0)
+            || since_slices < 0.22 + 0.025 * self.slices.len() as f32
+            || (self.morph_at.is_some()
+                && matches!(self.status, Status::Preparing | Status::Converting(_)))
+            || (self.morph_at.is_some() && status_t < 1.0);
+        if !animating {
+            return;
+        }
+        self.dirty = false;
         let Some(win) = &mut self.win else { return };
         let scene = Scene {
             scale: win.scale,
@@ -658,12 +690,13 @@ impl Wheel {
             },
             morph,
             status: self.morph_at.map(|_| self.status),
-            status_t: self.status_at.elapsed().as_secs_f32(),
+            status_t,
             time: self.opened.elapsed().as_secs_f32(),
             button_hover: self.button_hover,
             tooltip,
         };
-        render::draw(&mut win.pixmap, &scene, &win.fonts);
+        let base = win.base[usize::from(morph >= 1.0)].as_ref();
+        render::draw(&mut win.pixmap, &scene, &win.fonts, base);
         win.present();
     }
 }
@@ -777,6 +810,10 @@ impl Window {
                 old,
                 bits: bits.cast(),
                 pixmap: Pixmap::new(size as u32, size as u32)?,
+                base: [
+                    render::background(scale, 0.0),
+                    render::background(scale, 1.0),
+                ],
                 fonts: Fonts::load()?,
                 scale,
                 pos,

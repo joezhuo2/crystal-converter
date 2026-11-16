@@ -361,17 +361,7 @@ pub struct Scene<'a> {
 
 pub const BUTTON_TIPS: [&str; 2] = ["Show in folder", "Copy to clipboard"];
 
-pub fn draw(pm: &mut Pixmap, s: &Scene, fonts: &Fonts) {
-    pm.fill(Color::TRANSPARENT);
-    let ga = s.open.clamp(0.0, 1.0);
-    if ga <= 0.0 {
-        return;
-    }
-    let u = s.scale * (0.72 + 0.28 * ease_out_back(s.open));
-    let c = SIZE * s.scale / 2.0;
-    let m = s.morph.clamp(0.0, 1.0);
-    let r_out = R_OUT * (1.0 - STATUS_SHRINK * m) * u;
-
+fn draw_base(pm: &mut Pixmap, c: f32, u: f32, r_out: f32, ga: f32) {
     if let Some(shader) = RadialGradient::new(
         Point::from_xy(c, c + 6.0 * u),
         r_out * 0.9,
@@ -394,6 +384,37 @@ pub fn draw(pm: &mut Pixmap, s: &Scene, fonts: &Fonts) {
         }
     }
     fill(pm, circle(c, c, r_out), rgba(BG, 0.95 * ga));
+}
+
+pub fn background(scale: f32, morph: f32) -> Option<Pixmap> {
+    let size = (SIZE * scale).round() as u32;
+    let mut pm = Pixmap::new(size, size)?;
+    let r_out = R_OUT * (1.0 - STATUS_SHRINK * morph) * scale;
+    draw_base(&mut pm, SIZE * scale / 2.0, scale, r_out, 1.0);
+    Some(pm)
+}
+
+pub fn draw(pm: &mut Pixmap, s: &Scene, fonts: &Fonts, base: Option<&Pixmap>) {
+    let ga = s.open.clamp(0.0, 1.0);
+    let m = s.morph.clamp(0.0, 1.0);
+    let steady = ga >= 1.0 && (m <= 0.0 || m >= 1.0);
+    match base.filter(|b| steady && b.data().len() == pm.data().len()) {
+        Some(b) => pm.data_mut().copy_from_slice(b.data()),
+        None => pm.fill(Color::TRANSPARENT),
+    }
+    if ga <= 0.0 {
+        return;
+    }
+    let u = if steady {
+        s.scale
+    } else {
+        s.scale * (0.72 + 0.28 * ease_out_back(s.open))
+    };
+    let c = SIZE * s.scale / 2.0;
+    let r_out = R_OUT * (1.0 - STATUS_SHRINK * m) * u;
+    if !(steady && base.is_some()) {
+        draw_base(pm, c, u, r_out, ga);
+    }
 
     let n = s.slices.len();
     let r0 = (R_IN + 5.0) * u * (1.0 - m);

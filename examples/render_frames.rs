@@ -93,7 +93,7 @@ fn render(fonts: &Fonts, bg: &Pixmap, f: &Frame) -> Pixmap {
             .position(|h| *h > 0.02)
             .map(|i| (i, render::BUTTON_TIPS[i])),
     };
-    render::draw(&mut wheel, &scene, fonts);
+    render::draw(&mut wheel, &scene, fonts, None);
     let mut out = bg.clone();
     let x = (W - size) as i32 / 2;
     let y = (H - size) as i32 / 2;
