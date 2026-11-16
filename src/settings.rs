@@ -624,6 +624,8 @@ impl Feedback {
     }
 }
 
+type Installs = Arc<Mutex<Vec<(&'static str, Option<String>)>>>;
+
 fn row(ui: &mut Ui, label: &str, hint: &str, add: impl FnOnce(&mut Ui)) {
     let top = ui.cursor().top();
     ui.horizontal(|ui| {
@@ -662,11 +664,12 @@ struct SettingsApp {
     scroll_max: f32,
     selected: usize,
     feedback: Feedback,
+    install_errors: HashMap<&'static str, String>,
     update: Arc<Mutex<Option<update::Status>>>,
     checking: bool,
     recording: Option<(usize, Vec<u32>)>,
     deps: Option<(bool, bool)>,
-    installs: Arc<Mutex<Vec<(&'static str, bool)>>>,
+    installs: Installs,
 }
 
 impl SettingsApp {
@@ -737,6 +740,7 @@ impl SettingsApp {
             scroll_max: 0.0,
             selected: 0,
             feedback: Feedback::default(),
+            install_errors: HashMap::new(),
             update: Arc::new(Mutex::new(None)),
             checking: false,
             recording: None,
@@ -1141,11 +1145,13 @@ impl SettingsApp {
         ui.label(RichText::new("Crystal Converter").size(22.0).color(TEXT));
         ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(MUTED));
         ui.add_space(14.0);
-        let finished: Vec<(&'static str, bool)> =
-            std::mem::take(&mut *self.installs.lock().unwrap());
-        for (key, ok) in finished {
-            self.feedback
-                .set(key, if ok { Fb::Done } else { Fb::Error }, now);
+        let finished = std::mem::take(&mut *self.installs.lock().unwrap());
+        for (key, error) in finished {
+            let fb = if error.is_none() { Fb::Done } else { Fb::Error };
+            self.feedback.set(key, fb, now);
+            if let Some(e) = error {
+                self.install_errors.insert(key, e);
+            }
             self.deps = None;
         }
         let (ffmpeg, office) = *self.deps.get_or_insert_with(|| {
@@ -1174,6 +1180,7 @@ impl SettingsApp {
         ] {
             let busy = self.feedback.state(key, now).0 == Fb::Busy;
             let mut install = false;
+            let hint = self.install_errors.get(key).map_or(hint, String::as_str);
             row(ui, name, hint, |ui| {
                 if found && !busy {
                     ui.label(RichText::new("Found").color(ACCENT));
@@ -1189,11 +1196,12 @@ impl SettingsApp {
             });
             if install {
                 self.feedback.set(key, Fb::Busy, now);
+                self.install_errors.remove(key);
                 let done = self.installs.clone();
                 let ctx = ui.ctx().clone();
                 std::thread::spawn(move || {
-                    let ok = sys::winget_install(package);
-                    done.lock().unwrap().push((key, ok));
+                    let error = sys::winget_install(package).err();
+                    done.lock().unwrap().push((key, error));
                     ctx.request_repaint();
                 });
             }

@@ -259,9 +259,28 @@ pub fn pick_folder() -> Option<std::path::PathBuf> {
     }
 }
 
-pub fn winget_install(package: &str) -> bool {
+fn winget() -> std::path::PathBuf {
+    env::var_os("LOCALAPPDATA")
+        .map(|d| Path::new(&d).join(r"Microsoft\WindowsApps\winget.exe"))
+        .filter(|p| p.symlink_metadata().is_ok())
+        .unwrap_or_else(|| "winget".into())
+}
+
+fn winget_error(output: &str, code: Option<i32>) -> String {
+    output
+        .split(['\r', '\n'])
+        .map(str::trim)
+        .rfind(|l| l.chars().any(char::is_alphabetic))
+        .map(str::to_string)
+        .unwrap_or_else(|| match code {
+            Some(c) => format!("winget failed with code {c:#x}"),
+            None => "winget was stopped".into(),
+        })
+}
+
+pub fn winget_install(package: &str) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
-    std::process::Command::new("winget")
+    let out = std::process::Command::new(winget())
         .args([
             "install",
             "--id",
@@ -273,6 +292,35 @@ pub fn winget_install(package: &str) -> bool {
         ])
         .creation_flags(0x0800_0000)
         .stdin(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "winget not found. Install App Installer from the Microsoft Store.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(winget_error(
+        &String::from_utf8_lossy(&out.stdout),
+        out.status.code(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn winget_error_takes_last_readable_line() {
+        let out = "Found LibreOffice\r\n  \u{2588}\u{2588}  50%\r\nInstaller failed with exit code: 1603\r\n\r\n";
+        assert_eq!(
+            super::winget_error(out, Some(1)),
+            "Installer failed with exit code: 1603"
+        );
+        assert_eq!(
+            super::winget_error(" - / | ", Some(-1978335212)),
+            "winget failed with code 0x8a150014"
+        );
+    }
 }
