@@ -6,6 +6,30 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-16
+
+### Added
+
+- Job queue: files dropped while a conversion is running wait in line, and the
+  status circle shows how many are waiting.
+- A failed job shows a short reason with Copy error and Open log buttons, and a
+  batch reports for example "4 of 5 done, 1 failed".
+- Images and audio convert several files at once. Settings > General >
+  Parallel files sets how many (1-8, default: CPU count capped at 4).
+- The status circle shows time left and ffmpeg's encode speed.
+- A Windows notification when a job that took 10 seconds or more finishes while
+  the circle is closed or not always on top.
+- ffmpeg runs at below-normal priority, and the PC stays awake during a job.
+- Settings > General > Replace original (off by default) moves the source file
+  to the Recycle Bin after a successful conversion.
+- Hovering a slice shows the expected size (for example "~7.2 MB") or the new
+  dimensions for a resize.
+
+### Changed
+
+- The progress ring in a batch shows overall progress instead of resetting for
+  each file.
+
 ## [0.1.1] - 2026-11-16
 
 ### Changed
@@ -49,6 +73,7 @@ follows [Semantic Versioning](https://semver.org/).
   spring switches, gliding tabs and button icon feedback).
 - Release zip with ffmpeg bundled, plus a standalone exe.
 
-[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/joezhuo2/crystal-converter/releases/tag/v0.1.0

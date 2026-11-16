@@ -1,6 +1,6 @@
 [package]
 name = "crystal-converter"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Hold a hotkey while dragging a file to convert it from a radial wheel"
 license = "MIT"
