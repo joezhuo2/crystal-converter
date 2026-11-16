@@ -115,6 +115,7 @@ fn labels(kind: WheelKind, category: Category, ext: &str) -> Vec<String> {
         ext,
         true,
         &crystal_converter::config::default_presets(),
+        1,
     )
     .into_iter()
     .map(|p| p.name)

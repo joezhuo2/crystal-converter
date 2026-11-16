@@ -1,7 +1,7 @@
 use crate::config::{Category, Preset, WheelKind};
 use std::{fs::File, io::Read, path::Path};
 
-pub const MAX_SLICES: usize = 10;
+pub const MAX_SLICES: usize = 16;
 
 const IMAGE: &[&str] = &[
     "png", "jpg", "webp", "avif", "gif", "bmp", "tiff", "ico", "heic", "heif", "svg", "tga",
@@ -96,7 +96,9 @@ pub fn targets(category: Category, ext: &str, office: bool) -> Vec<&'static str>
     let list: &[&'static str] = match category {
         Category::Image if ext == "gif" => &["mp4", "webm", "webp", "png", "jpg"],
         Category::Image => &["png", "jpg", "webp", "avif", "gif", "ico", "bmp", "pdf"],
-        Category::Video => &["mp4", "webm", "mov", "mkv", "avi", "gif", "mp3", "m4a"],
+        Category::Video => &[
+            "mp4", "webm", "mov", "mkv", "avi", "gif", "webp", "mp3", "m4a", "srt",
+        ],
         Category::Audio => &["mp3", "wav", "flac", "opus", "ogg", "m4a"],
         Category::Document if ext == "pdf" && office => &["png", "jpg", "docx"],
         Category::Document if ext == "pdf" => &["png", "jpg"],
@@ -170,6 +172,28 @@ fn modify_builtins(category: Category) -> Vec<Preset> {
                 rotate: 90,
                 ..p("Rotate")
             },
+            Preset {
+                trim_end: 30.0,
+                ..p("First 30 s")
+            },
+            Preset {
+                op: "speed2".into(),
+                ..p("2x speed")
+            },
+            Preset {
+                op: "hdr".into(),
+                ..p("HDR to SDR")
+            },
+            Preset {
+                op: "thumb".into(),
+                format: "jpg".into(),
+                ..p("Thumbnail")
+            },
+            Preset {
+                op: "sheet".into(),
+                format: "jpg".into(),
+                ..p("Contact sheet")
+            },
         ],
         Category::Audio => vec![
             Preset {
@@ -207,6 +231,7 @@ pub fn slices(
     ext: &str,
     office: bool,
     presets: &[Preset],
+    count: usize,
 ) -> Vec<Preset> {
     let mut out: Vec<Preset> = match kind {
         WheelKind::Convert => targets(category, ext, office)
@@ -215,6 +240,21 @@ pub fn slices(
             .collect(),
         WheelKind::Modify => modify_builtins(category),
     };
+    if count > 1 {
+        match (kind, category) {
+            (WheelKind::Modify, Category::Video | Category::Audio) => out.push(Preset {
+                op: "join".into(),
+                ..Preset::named("Join", category)
+            }),
+            (WheelKind::Convert, Category::Image) => out.push(Preset {
+                op: "slideshow".into(),
+                wheel: WheelKind::Convert,
+                format: "mp4".into(),
+                ..Preset::named("Slideshow", category)
+            }),
+            _ => {}
+        }
+    }
     out.extend(
         presets
             .iter()
@@ -254,10 +294,43 @@ mod tests {
     #[test]
     fn slices_include_matching_presets_only() {
         let presets = crate::config::default_presets();
-        let video = slices(WheelKind::Modify, Category::Video, "mp4", false, &presets);
+        let video = slices(
+            WheelKind::Modify,
+            Category::Video,
+            "mp4",
+            false,
+            &presets,
+            1,
+        );
         assert!(video.iter().any(|p| p.name == "Discord 10 MB"));
-        let audio = slices(WheelKind::Modify, Category::Audio, "mp3", false, &presets);
+        let audio = slices(
+            WheelKind::Modify,
+            Category::Audio,
+            "mp3",
+            false,
+            &presets,
+            1,
+        );
         assert!(!audio.iter().any(|p| p.name == "Discord 10 MB"));
         assert!(video.len() <= MAX_SLICES);
+        assert!(!video.iter().any(|p| p.op == "join"));
+        let many = slices(
+            WheelKind::Modify,
+            Category::Video,
+            "mp4",
+            false,
+            &presets,
+            3,
+        );
+        assert!(many.iter().any(|p| p.op == "join"));
+        let images = slices(
+            WheelKind::Convert,
+            Category::Image,
+            "png",
+            false,
+            &presets,
+            2,
+        );
+        assert!(images.iter().any(|p| p.op == "slideshow"));
     }
 }
