@@ -15,6 +15,11 @@ follows [Semantic Versioning](https://semver.org/).
   closes, and the working set is trimmed after startup, update checks and the
   wheel closing.
 
+### Fixed
+
+- Installing ffmpeg or LibreOffice from Settings no longer fails when winget is
+  not on PATH, and a failed install now shows the reason.
+
 ## [0.1.0] - 2026-11-15
 
 ### Added
