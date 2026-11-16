@@ -32,6 +32,7 @@ fn main() {
         time: 0.0,
         button_hover: [0.0; 2],
         tooltip: None,
+        stats: "",
     };
     let n = 60;
     let base = render::background(scale, 0.0);
