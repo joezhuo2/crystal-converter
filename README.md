@@ -68,11 +68,14 @@ Nothing downloads or installs on its own.
 1. Start dragging a file (or several, or a folder) from Explorer, the
    desktop or any app that drags files.
 2. While dragging, hold <kbd>`</kbd> for the **Convert** wheel or
-   <kbd>Caps Lock</kbd> for the **Modify** wheel. The slices match the file
-   you're holding.
+   <kbd>Caps Lock</kbd> for the **Modify** wheel. As soon as you move the
+   mouse, the slices fill in with the formats that fit the file you're
+   holding.
 3. Then either:
    - **drop on a slice** to start right away, or
-   - **drop in the center**, let go of the key, and click a slice.
+   - **drop in the center**, let go of the key, and click a slice, or
+   - **drop anywhere else** to cancel. Clicking outside the wheel also
+     cancels.
 4. The wheel collapses into one circle that shows each stage with its own
    animated icon: preparing, converting (with a progress ring when the length
    is known) and done. A sound plays when the job starts and when it
@@ -131,8 +134,11 @@ The Convert wheel leaves out the format the file already has.
 | Audio (MP3, WAV, FLAC, OGG, Opus, M4A, AAC, WMA, AIFF) | MP3, WAV, FLAC, Opus, OGG, M4A |
 | Document (DOC, DOCX, ODT, RTF, TXT, HTML) | PDF, DOCX, ODT, TXT, HTML |
 | Spreadsheet or slides (XLS, XLSX, ODS, CSV, PPT, PPTX, ODP) | PDF |
+| PDF | PNG, JPG (one image per page), DOCX |
 
-Documents need [LibreOffice](https://www.libreoffice.org). Settings > About
+PDF pages are rendered by Windows itself at twice their size. Everything
+else in the Documents rows, and PDF to DOCX, needs
+[LibreOffice](https://www.libreoffice.org). Settings > About
 shows whether it's installed and has an **Install** button (through winget)
 if not. Transparent images converted to JPG, BMP or PDF get a white
 background.
