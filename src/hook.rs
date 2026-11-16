@@ -1,5 +1,8 @@
 use crate::{app, config::Config};
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering::Relaxed};
+use std::sync::{
+    atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering::Relaxed},
+    Mutex,
+};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
     System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
@@ -17,6 +20,8 @@ static HOST: AtomicIsize = AtomicIsize::new(0);
 static CONVERT: AtomicU32 = AtomicU32::new(0);
 static MODIFY: AtomicU32 = AtomicU32::new(0);
 static HELD: AtomicU32 = AtomicU32::new(0);
+static PRESETS: Mutex<Vec<(u32, u32)>> = Mutex::new(Vec::new());
+pub const FIRST_PRESET: u32 = 3;
 pub static ESCAPE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 static THREAD: AtomicU32 = AtomicU32::new(0);
@@ -39,6 +44,15 @@ pub fn install(host: HWND, config: &Config) {
 pub fn set_keys(config: &Config) {
     CONVERT.store(config.convert_key, Relaxed);
     MODIFY.store(config.modify_key, Relaxed);
+    if let Ok(mut keys) = PRESETS.lock() {
+        *keys = config
+            .presets
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.key != 0)
+            .map(|(i, p)| (p.key, i as u32 + FIRST_PRESET))
+            .collect();
+    }
 }
 
 pub fn uninstall() {
@@ -78,7 +92,11 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
             } else if vk == MODIFY.load(Relaxed) {
                 2
             } else {
-                0
+                PRESETS.try_lock().map_or(0, |keys| {
+                    keys.iter()
+                        .find(|(k, _)| *k == vk)
+                        .map_or(0, |(_, kind)| *kind)
+                })
             };
             if kind != 0 {
                 let held = HELD.load(Relaxed);
