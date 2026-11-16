@@ -117,7 +117,8 @@ number, so nothing is overwritten.
   Bin), **Open settings**, **Launch at login**, **Always on top** and
   **Quit**.
 - **Low overhead.** When idle the app is a tray icon and a keyboard hook, with
-  no window and nothing drawing: about 2–4 MB of private memory and no CPU.
+  no window and nothing drawing: about 2 MB of private memory, a working set
+  under 1 MB once settled, and no CPU.
   The wheel window is created when you press the key and destroyed when it
   closes. ffmpeg runs as a separate process only during a job. Settings is a
   separate process that exits when you close it.

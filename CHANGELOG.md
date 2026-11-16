@@ -6,6 +6,15 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-16
+
+### Changed
+
+- Lower idle memory: the OpenGL, DWM and sound libraries load only when the
+  settings window or a sound needs them, sounds are freed when the wheel
+  closes, and the working set is trimmed after startup, update checks and the
+  wheel closing.
+
 ## [0.1.0] - 2026-11-15
 
 ### Added
@@ -35,5 +44,6 @@ follows [Semantic Versioning](https://semver.org/).
   spring switches, gliding tabs and button icon feedback).
 - Release zip with ffmpeg bundled, plus a standalone exe.
 
-[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/joezhuo2/crystal-converter/releases/tag/v0.1.0
