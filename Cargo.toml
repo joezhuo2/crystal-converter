@@ -21,6 +21,7 @@ features = [
   "Data_Pdf",
   "Foundation",
   "Graphics_Imaging",
+  "Media_Ocr",
   "Storage",
   "Storage_Streams",
   "Win32_Foundation",

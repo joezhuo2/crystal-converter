@@ -132,9 +132,13 @@ The Convert wheel leaves out the format the file already has.
 | Animated GIF | MP4, WebM, WebP, PNG, JPG |
 | Video (MP4, MOV, MKV, WebM, AVI, WMV, FLV, MPG, TS, 3GP) | MP4, WebM, MOV, MKV, AVI, GIF, MP3, M4A |
 | Audio (MP3, WAV, FLAC, OGG, Opus, M4A, AAC, WMA, AIFF) | MP3, WAV, FLAC, Opus, OGG, M4A |
-| Document (DOC, DOCX, ODT, RTF, TXT, HTML) | PDF, DOCX, ODT, TXT, HTML |
-| Spreadsheet or slides (XLS, XLSX, ODS, CSV, PPT, PPTX, ODP) | PDF |
-| PDF | PNG, JPG (one image per page), DOCX |
+| Document (DOC, DOCX, ODT, RTF, TXT, HTML) | PDF, DOCX, ODT, TXT, HTML, ZIP |
+| Spreadsheet or slides (XLS, XLSX, ODS, CSV, PPT, PPTX, ODP) | PDF, ZIP |
+| PDF | PNG, JPG (one image per page), DOCX, TXT (OCR), MERGE, ZIP |
+| Markdown (MD) | HTML, PDF, ZIP |
+| Archive (ZIP, 7Z, RAR, TAR, TGZ, GZ) | EXTRACT |
+
+Images also get a TXT slice, and Video and Audio get ZIP.
 
 PDF pages are rendered by Windows itself at twice their size. Everything
 else in the Documents rows, and PDF to DOCX, needs
@@ -142,6 +146,23 @@ else in the Documents rows, and PDF to DOCX, needs
 shows whether it's installed and has an **Install** button (through winget)
 if not. Transparent images converted to JPG, BMP or PDF get a white
 background.
+
+- **TXT (OCR)** reads text from an image or a PDF with the OCR built into
+  Windows, one TXT per file. It needs an OCR language installed (Windows
+  Settings > Time & language > Language & region); the app says so if not.
+- **MERGE** joins two or more dropped PDFs into one, in the order they
+  were dropped. It handles ordinary PDFs with a classic cross-reference
+  table, including incremental updates. Encrypted PDFs and PDFs that use
+  compressed object or cross-reference streams (PDF 1.5 and later from some
+  tools) are refused with an error. Bookmarks and form fields of the
+  originals are dropped.
+- **ZIP and EXTRACT** use the `tar.exe` that ships with Windows 10 and
+  later. ZIP puts the dropped files in one `.zip`; EXTRACT unpacks an archive
+  into a new folder next to it and refuses archives with paths that would
+  land outside that folder.
+- **Markdown to HTML or PDF** understands headings, emphasis, code, lists,
+  links, images, quotes and tables, and escapes any raw HTML. PDF is printed
+  by Microsoft Edge, which comes with Windows 11.
 
 ### Modify wheel
 
@@ -257,6 +278,7 @@ cargo run --release --example render_frames -- target/frames
 | `src/render.rs` | tiny-skia drawing for the wheel, status circle and icon |
 | `src/convert.rs` | ffmpeg arguments, progress, image-to-PDF writer, LibreOffice |
 | `src/formats.rs` | File type detection, targets and built-in slices |
+| `src/archive.rs`, `src/pdfmerge.rs`, `src/markdown.rs`, `src/ocr.rs` | tar zip and extract, PDF merging, Markdown to HTML, Windows OCR |
 | `src/settings.rs` | egui settings window and its animated widgets |
 | `src/tray.rs`, `src/update.rs`, `src/sys.rs` | Tray menu, update check, registry, clipboard, sounds |
 

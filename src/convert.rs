@@ -1,5 +1,6 @@
 use crate::config::{Category, Preset};
 use crate::formats::{detect, ext_of};
+use crate::{archive, markdown as md, ocr, pdfmerge};
 use std::{
     env, fs,
     io::{self, BufRead, BufReader, Read},
@@ -46,9 +47,10 @@ pub struct Info {
 }
 
 pub fn run(job: Job, cancel: &AtomicBool, emit: &mut dyn FnMut(Event)) {
-    let merge_pdf =
-        job.preset.format == "pdf" && job.files.iter().all(|f| detect(f) == Some(Category::Image));
-    let groups: Vec<Vec<PathBuf>> = if merge_pdf {
+    let grouped = matches!(job.preset.format.as_str(), "merge" | "zip")
+        || job.preset.format == "pdf"
+            && job.files.iter().all(|f| detect(f) == Some(Category::Image));
+    let groups: Vec<Vec<PathBuf>> = if grouped {
         vec![job.files.clone()]
     } else {
         job.files.iter().map(|f| vec![f.clone()]).collect()
@@ -112,8 +114,21 @@ fn convert(
     if category == Category::Document && in_ext == "pdf" && matches!(fmt.as_str(), "png" | "jpg") {
         return pdf_pages(input, &dir, &stem(input), &fmt, cancel, progress);
     }
-    let out = unique_path(&dir, &stem(input), suffix.as_deref(), &fmt);
+    let out = if category == Category::Archive {
+        archive::unique_dir(&dir, &stem(input))
+    } else {
+        let ext = if fmt == "merge" { "pdf" } else { &fmt };
+        unique_path(&dir, &stem(input), suffix.as_deref(), ext)
+    };
     let result = match category {
+        Category::Archive => archive::extract(input, &out),
+        _ if fmt == "zip" => archive::zip(group, &out),
+        Category::Document if in_ext == "pdf" && fmt == "merge" => pdfmerge::merge(group, &out),
+        Category::Document if in_ext == "pdf" && fmt == "txt" => {
+            ocr_pdf(input, &out, cancel, progress)
+        }
+        Category::Image if fmt == "txt" => ocr_image(input, &out, cancel),
+        Category::Document if in_ext == "md" => markdown(input, &fmt, &out, cancel),
         Category::Document => office(input, &fmt, &out),
         Category::Image if fmt == "pdf" => images_to_pdf(group, &out, p, cancel, progress),
         _ => ffmpeg_convert(
@@ -590,7 +605,7 @@ fn spawn_err(e: io::Error) -> String {
     }
 }
 
-fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+pub(crate) fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut c = Command::new(program);
     c.creation_flags(NO_WINDOW).stdin(Stdio::null());
     c
@@ -734,6 +749,128 @@ fn office(input: &Path, fmt: &str, out: &Path) -> Result<(), String> {
     result
 }
 
+fn write_text(out: &Path, text: String) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("no text found".into());
+    }
+    fs::write(out, text).map_err(|e| e.to_string())
+}
+
+fn ocr_image(input: &Path, out: &Path, cancel: &AtomicBool) -> Result<(), String> {
+    let tmp = env::temp_dir().join(format!(
+        "crystal-converter-{}-{}.png",
+        std::process::id(),
+        next_id()
+    ));
+    let mut vf = image_filters(&Preset {
+        max_dim: 4000,
+        ..Preset::default()
+    });
+    vf.push(WHITE_BG.into());
+    let mut args = base_args(input);
+    args.extend(["-vf".into(), vf.join(","), "-frames:v".into(), "1".into()]);
+    args.extend(["-update".into(), "1".into(), tmp.to_string_lossy().into()]);
+    let text = run_ffmpeg(&args, None, cancel, &mut |_| {}).and_then(|_| ocr::recognize(&tmp));
+    let _ = fs::remove_file(&tmp);
+    write_text(out, text?)
+}
+
+fn ocr_pdf(
+    input: &Path,
+    out: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<(), String> {
+    let tmp = env::temp_dir().join(format!(
+        "crystal-converter-{}-{}",
+        std::process::id(),
+        next_id()
+    ));
+    fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let pages = pdf_pages(input, &tmp, "page", "png", cancel, &mut |f| {
+            progress(f / 2.0)
+        })?;
+        let mut texts = Vec::new();
+        for (i, page) in pages.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("cancelled".into());
+            }
+            texts.push(ocr::recognize(page)?);
+            progress(0.5 + (i + 1) as f32 / pages.len() as f32 / 2.0);
+        }
+        write_text(out, texts.join("\n\n"))
+    })();
+    let _ = fs::remove_dir_all(&tmp);
+    result
+}
+
+fn edge() -> Option<PathBuf> {
+    ["ProgramFiles(x86)", "ProgramFiles"]
+        .iter()
+        .filter_map(env::var_os)
+        .map(|p| PathBuf::from(p).join(r"Microsoft\Edge\Application\msedge.exe"))
+        .find(|p| p.exists())
+}
+
+fn file_url(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    format!(
+        "file:///{}",
+        s.replace('%', "%25")
+            .replace('\\', "/")
+            .replace(' ', "%20")
+            .replace('#', "%23")
+    )
+}
+
+fn markdown(input: &Path, fmt: &str, out: &Path, cancel: &AtomicBool) -> Result<(), String> {
+    let bytes = fs::read(input).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&bytes);
+    let body = md::to_html(text.trim_start_matches('\u{feff}'));
+    let title = stem(input);
+    if fmt == "html" {
+        return fs::write(out, md::page(&title, &body, None)).map_err(|e| e.to_string());
+    }
+    let edge = edge().ok_or("Microsoft Edge is needed to convert Markdown to PDF")?;
+    let tmp = env::temp_dir().join(format!(
+        "crystal-converter-{}-{}",
+        std::process::id(),
+        next_id()
+    ));
+    fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let abs = std::path::absolute(input).map_err(|e| e.to_string())?;
+        let base = format!("{}/", file_url(abs.parent().unwrap_or(&abs)));
+        let html = tmp.join("page.html");
+        let pdf = tmp.join("page.pdf");
+        fs::write(&html, md::page(&title, &body, Some(&base))).map_err(|e| e.to_string())?;
+        let mut child = command(edge)
+            .args(["--headless", "--disable-gpu", "--no-pdf-header-footer"])
+            .arg(format!("--user-data-dir={}", tmp.join("profile").display()))
+            .arg(format!("--print-to-pdf={}", pdf.display()))
+            .arg(file_url(&html))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        while child.try_wait().map_err(|e| e.to_string())?.is_none() {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = child.kill();
+                return Err("cancelled".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if pdf.exists() {
+            move_file(&pdf, out)
+        } else {
+            Err("Microsoft Edge could not print this file".into())
+        }
+    })();
+    let _ = fs::remove_dir_all(&tmp);
+    result
+}
+
 fn move_file(from: &Path, to: &Path) -> Result<(), String> {
     fs::rename(from, to)
         .or_else(|_| {
@@ -838,6 +975,10 @@ pub fn pdf_from_jpegs(pages: &[Vec<u8>]) -> Result<Vec<u8>, String> {
             .into_bytes(),
         );
     }
+    Ok(write_pdf(&objs))
+}
+
+pub fn write_pdf(objs: &[Vec<u8>]) -> Vec<u8> {
     let mut out = b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n".to_vec();
     let mut offsets = Vec::with_capacity(objs.len());
     for (i, body) in objs.iter().enumerate() {
@@ -858,7 +999,7 @@ pub fn pdf_from_jpegs(pages: &[Vec<u8>]) -> Result<Vec<u8>, String> {
         )
         .as_bytes(),
     );
-    Ok(out)
+    out
 }
 
 fn next_id() -> u32 {

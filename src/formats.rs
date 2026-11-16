@@ -14,8 +14,9 @@ const AUDIO: &[&str] = &[
 ];
 const DOCUMENT: &[&str] = &[
     "doc", "docx", "odt", "rtf", "txt", "html", "xls", "xlsx", "ods", "csv", "ppt", "pptx", "odp",
-    "pdf",
+    "pdf", "md",
 ];
+const ARCHIVE: &[&str] = &["zip", "7z", "rar", "tar", "tgz", "gz"];
 const OFFICE_PDF_ONLY: &[&str] = &["xls", "xlsx", "ods", "csv", "ppt", "pptx", "odp"];
 
 pub fn ext_of(path: &Path) -> String {
@@ -28,6 +29,7 @@ pub fn ext_of(path: &Path) -> String {
         "jpeg" | "jfif" | "jpe" => "jpg".into(),
         "tif" => "tiff".into(),
         "htm" => "html".into(),
+        "markdown" => "md".into(),
         _ => ext,
     }
 }
@@ -46,6 +48,7 @@ fn by_ext(ext: &str) -> Option<Category> {
         (VIDEO, Category::Video),
         (AUDIO, Category::Audio),
         (DOCUMENT, Category::Document),
+        (ARCHIVE, Category::Archive),
     ]
     .into_iter()
     .find(|(list, _)| list.contains(&ext))
@@ -98,6 +101,8 @@ pub fn targets(category: Category, ext: &str, office: bool) -> Vec<&'static str>
         Category::Image => &["png", "jpg", "webp", "avif", "gif", "ico", "bmp", "pdf"],
         Category::Video => &["mp4", "webm", "mov", "mkv", "avi", "gif", "mp3", "m4a"],
         Category::Audio => &["mp3", "wav", "flac", "opus", "ogg", "m4a"],
+        Category::Archive => &["extract"],
+        Category::Document if ext == "md" => &["html", "pdf"],
         Category::Document if ext == "pdf" && office => &["png", "jpg", "docx"],
         Category::Document if ext == "pdf" => &["png", "jpg"],
         Category::Document if !office => &[],
@@ -106,6 +111,15 @@ pub fn targets(category: Category, ext: &str, office: bool) -> Vec<&'static str>
         Category::Any => &[],
     };
     list.iter().copied().filter(|t| *t != ext).collect()
+}
+
+fn extras(category: Category, ext: &str) -> Vec<&'static str> {
+    match category {
+        Category::Archive | Category::Any => vec![],
+        Category::Image => vec!["txt"],
+        Category::Document if ext == "pdf" => vec!["txt", "merge", "zip"],
+        _ => vec!["zip"],
+    }
 }
 
 fn modify_builtins(category: Category) -> Vec<Preset> {
@@ -211,6 +225,7 @@ pub fn slices(
     let mut out: Vec<Preset> = match kind {
         WheelKind::Convert => targets(category, ext, office)
             .into_iter()
+            .chain(extras(category, ext))
             .map(Preset::convert_to)
             .collect(),
         WheelKind::Modify => modify_builtins(category),
@@ -249,6 +264,25 @@ mod tests {
         assert!(!targets(Category::Image, "png", false).contains(&"png"));
         assert!(targets(Category::Document, "docx", false).is_empty());
         assert_eq!(targets(Category::Document, "xlsx", true), vec!["pdf"]);
+    }
+
+    #[test]
+    fn document_and_archive_slices() {
+        let names = |c, e| -> Vec<String> {
+            slices(WheelKind::Convert, c, e, false, &[])
+                .into_iter()
+                .map(|p| p.name)
+                .collect()
+        };
+        assert_eq!(by_ext("zip"), Some(Category::Archive));
+        assert_eq!(ext_of(Path::new("a.markdown")), "md");
+        assert_eq!(names(Category::Archive, "zip"), ["EXTRACT"]);
+        assert_eq!(names(Category::Document, "md"), ["HTML", "PDF", "ZIP"]);
+        assert_eq!(
+            names(Category::Document, "pdf"),
+            ["PNG", "JPG", "TXT", "MERGE", "ZIP"]
+        );
+        assert!(names(Category::Image, "png").contains(&"TXT".to_string()));
     }
 
     #[test]
