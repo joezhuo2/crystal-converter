@@ -139,6 +139,93 @@ pub fn copy_files(owner: windows::Win32::Foundation::HWND, paths: &[std::path::P
     }
 }
 
+pub fn copy_text(owner: windows::Win32::Foundation::HWND, text: &str) -> bool {
+    use windows::Win32::{
+        Foundation::{GlobalFree, HANDLE},
+        System::{
+            DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
+            Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
+            Ole::CF_UNICODETEXT,
+        },
+    };
+    let wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        let Ok(mem) = GlobalAlloc(GMEM_MOVEABLE, wide.len() * 2) else {
+            return false;
+        };
+        let ptr = GlobalLock(mem) as *mut u16;
+        if ptr.is_null() {
+            let _ = GlobalFree(Some(mem));
+            return false;
+        }
+        std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+        let _ = GlobalUnlock(mem);
+        if OpenClipboard(Some(owner)).is_err() {
+            let _ = GlobalFree(Some(mem));
+            return false;
+        }
+        let _ = EmptyClipboard();
+        let ok = SetClipboardData(u32::from(CF_UNICODETEXT.0), Some(HANDLE(mem.0))).is_ok();
+        let _ = CloseClipboard();
+        if !ok {
+            let _ = GlobalFree(Some(mem));
+        }
+        ok
+    }
+}
+
+pub struct KeepAwake;
+
+pub fn keep_awake() -> KeepAwake {
+    use windows::Win32::System::Power::{
+        SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED,
+    };
+    unsafe {
+        SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+    }
+    KeepAwake
+}
+
+impl Drop for KeepAwake {
+    fn drop(&mut self) {
+        use windows::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS};
+        unsafe {
+            SetThreadExecutionState(ES_CONTINUOUS);
+        }
+    }
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+pub fn toast(title: &str, body: &str) {
+    use windows::{
+        Data::Xml::Dom::XmlDocument,
+        UI::Notifications::{ToastNotification, ToastNotificationManager},
+    };
+    const AUMID: &str = "CrystalConverter";
+    reg_set(
+        &format!(r"Software\Classes\AppUserModelId\{AUMID}"),
+        Some("DisplayName"),
+        "Crystal Converter",
+    );
+    let xml = format!(
+        "<toast><visual><binding template=\"ToastText02\"><text id=\"1\">{}</text><text id=\"2\">{}</text></binding></visual></toast>",
+        xml_escape(title),
+        xml_escape(body)
+    );
+    let _ = (|| -> windows::core::Result<()> {
+        let doc = XmlDocument::new()?;
+        doc.LoadXml(&HSTRING::from(xml))?;
+        let toast = ToastNotification::CreateToastNotification(&doc)?;
+        ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(AUMID))?.Show(&toast)
+    })();
+}
+
 #[derive(Clone, Copy)]
 pub enum Sound {
     Start,

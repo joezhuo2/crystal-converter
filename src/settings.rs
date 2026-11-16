@@ -814,6 +814,26 @@ impl SettingsApp {
                 switch(ui, &mut c.hardware_encoding);
             },
         );
+        row(
+            ui,
+            "Parallel files",
+            "Images and audio convert this many at once",
+            |ui| {
+                let mut v = c.parallel_jobs.clamp(1, 8) as f32;
+                if smooth_range(ui, &mut v, 1.0, 8.0, 1.0, 120.0).changed() {
+                    c.parallel_jobs = v as u32;
+                }
+                ui.label(c.parallel_jobs.clamp(1, 8).to_string());
+            },
+        );
+        row(
+            ui,
+            "Replace original",
+            "Move the source to the Recycle Bin after a successful conversion",
+            |ui| {
+                switch(ui, &mut c.replace_original);
+            },
+        );
         row(ui, "Launch at login", "", |ui| {
             switch(ui, &mut c.launch_at_login);
         });
