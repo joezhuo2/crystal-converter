@@ -211,6 +211,7 @@ fn ffmpeg_convert(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(f32),
 ) -> Result<(), String> {
+    crate::config::split_args(&p.args)?;
     let info = probe(input)?;
     let containers = ["mp4", "m4v", "mov", "mkv"];
     if !has_ops(p) && containers.contains(&fmt) && containers.contains(&ext_of(input).as_str()) {
@@ -245,6 +246,7 @@ fn has_ops(p: &Preset) -> bool {
         || p.mono
         || p.mute
         || p.strip_metadata
+        || !p.args.trim().is_empty()
 }
 
 fn base_args(input: &Path) -> Vec<String> {
@@ -548,6 +550,7 @@ pub fn build_args(
     if !af.is_empty() && !p.mute {
         a.extend(["-af".into(), af.join(",")]);
     }
+    a.extend(crate::config::split_args(&p.args).unwrap_or_default());
     a.push(out.to_string_lossy().into());
     a
 }
@@ -1014,6 +1017,20 @@ mod tests {
             Some("h264_nvenc"),
         );
         assert!(a.contains(&"-maxrate".to_string()) && a.contains(&"h264_nvenc".to_string()));
+        let custom = Preset {
+            args: "-metadata \"title=a b\"".into(),
+            ..p
+        };
+        let a = build_args(
+            Path::new("in.mov"),
+            Path::new("out.mp4"),
+            "mp4",
+            Category::Video,
+            &custom,
+            &info,
+            None,
+        );
+        assert_eq!(a[a.len() - 3..], ["-metadata", "title=a b", "out.mp4"]);
     }
 
     #[test]
