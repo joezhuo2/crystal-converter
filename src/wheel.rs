@@ -206,6 +206,7 @@ pub struct Wheel {
     close_at: Option<Instant>,
     closing_at: Option<Instant>,
     dirty: bool,
+    quick: Option<Preset>,
 }
 
 impl Wheel {
@@ -239,6 +240,7 @@ impl Wheel {
             close_at: None,
             closing_at: None,
             dirty: true,
+            quick: None,
         }
     }
 
@@ -264,6 +266,19 @@ impl Wheel {
         }
         hook::ESCAPE_ACTIVE.store(true, Ordering::Relaxed);
         self.tick();
+    }
+
+    pub fn show_preset(&mut self, index: usize, config: &Config) {
+        let Some(preset) = config.presets.get(index).cloned() else {
+            return;
+        };
+        if self.busy() {
+            return;
+        }
+        self.show(preset.wheel, config);
+        if self.phase == Phase::Drag {
+            self.quick = Some(preset);
+        }
     }
 
     pub fn open_files(&mut self, files: Vec<PathBuf>, config: &Config) {
@@ -356,6 +371,12 @@ impl Wheel {
             ),
             None => Vec::new(),
         };
+        if let Some(p) = &self.quick {
+            self.slices = match category {
+                Some(c) if p.matches(c) => vec![p.clone()],
+                _ => Vec::new(),
+            };
+        }
         self.slice_hover = vec![0.0; self.slices.len()];
         self.slices_at = Some(Instant::now());
     }
@@ -403,6 +424,14 @@ impl Wheel {
         if self.files.is_empty() {
             self.close();
             return false;
+        }
+        if self.quick.is_some() {
+            if self.slices.is_empty() {
+                self.close();
+                return false;
+            }
+            self.start(0);
+            return true;
         }
         let (x, y) = self.local(pt.0, pt.1);
         match self.hit(x, y) {
@@ -496,6 +525,7 @@ impl Wheel {
 
     fn start(&mut self, index: usize) {
         self.dirty = true;
+        self.quick = None;
         let Some(preset) = self.slices.get(index).cloned() else {
             return;
         };
@@ -754,7 +784,7 @@ impl Wheel {
             || (self.morph_at.is_some()
                 && matches!(self.status, Status::Preparing | Status::Converting(_)))
             || (self.morph_at.is_some() && status_t < 1.0);
-        if !animating {
+        if !animating || self.quick.is_some() {
             return;
         }
         self.dirty = false;
