@@ -1,7 +1,9 @@
 use crate::{
     app,
     config::{self, Category, Config, OutputMode, Preset, WheelKind},
-    convert, formats, render, sys, update,
+    convert, formats, render, sys,
+    tools::{self, Tool},
+    update,
 };
 use eframe::egui::{
     self, pos2, vec2, Align2, Color32, ComboBox, CornerRadius, Event, FontData, FontDefinitions,
@@ -649,7 +651,15 @@ enum Tab {
     General,
     Hotkeys,
     Presets,
+    Tools,
     About,
+}
+
+#[derive(Default)]
+struct ToolJob {
+    label: String,
+    fraction: f32,
+    result: Option<Result<(), String>>,
 }
 
 struct SettingsApp {
@@ -667,6 +677,10 @@ struct SettingsApp {
     recording: Option<(usize, Vec<u32>)>,
     deps: Option<(bool, bool)>,
     installs: Arc<Mutex<Vec<(&'static str, bool)>>>,
+    tools_found: Option<Vec<Option<std::path::PathBuf>>>,
+    tool_job: Arc<Mutex<ToolJob>>,
+    tool_error: Option<String>,
+    confirm: Option<Tool>,
 }
 
 impl SettingsApp {
@@ -742,6 +756,10 @@ impl SettingsApp {
             recording: None,
             deps: None,
             installs: Arc::new(Mutex::new(Vec::new())),
+            tools_found: None,
+            tool_job: Arc::new(Mutex::new(ToolJob::default())),
+            tool_error: None,
+            confirm: None,
         }
     }
 
@@ -1136,6 +1154,176 @@ impl SettingsApp {
         }
     }
 
+    fn tools(&mut self, ui: &mut Ui) {
+        let now = ui.input(|i| i.time);
+        let (label, fraction) = {
+            let mut job = self.tool_job.lock().unwrap();
+            if let Some(result) = job.result.take() {
+                let fb = if result.is_ok() { Fb::Done } else { Fb::Error };
+                self.feedback.set(Tool::Whisper.exe(), fb, now);
+                self.tool_error = result.err();
+                self.tools_found = None;
+            }
+            (job.label.clone(), job.fraction)
+        };
+        let found = self
+            .tools_found
+            .get_or_insert_with(|| Tool::ALL.iter().map(|t| tools::find(*t)).collect())
+            .clone();
+        ui.label(
+            RichText::new(
+                "Optional tools for extra slices. Downloads start only when you click and are checked before use.",
+            )
+            .color(MUTED),
+        );
+        ui.add_space(12.0);
+        for (tool, path) in Tool::ALL.into_iter().zip(found) {
+            let model_ready =
+                tool != Tool::Whisper || tools::model_path(&self.config.whisper_model).exists();
+            let busy = self.feedback.state(tool.exe(), now).0 == Fb::Busy;
+            let (mut download, mut page, mut install) = (false, false, false);
+            row(
+                ui,
+                tool.name(),
+                &format!("{} (licence: {})", tool.purpose(), tool.licence()),
+                |ui| {
+                    if tool == Tool::Whisper {
+                        if path.is_none() || !model_ready || busy {
+                            download =
+                                self.feedback
+                                    .button(ui, tool.exe(), Icon::Download, "Download");
+                        }
+                        if busy {
+                            ui.label(
+                                RichText::new(format!("{label} {:.0}%", fraction * 100.0))
+                                    .color(MUTED),
+                            );
+                            return;
+                        }
+                    } else {
+                        if tool.installer().is_some_and(|(exe, _)| tools::on_path(exe))
+                            && path.is_none()
+                        {
+                            install =
+                                self.feedback
+                                    .button(ui, tool.exe(), Icon::Download, "Install");
+                        }
+                        page = self
+                            .feedback
+                            .button(ui, tool.name(), Icon::Link, "Download page");
+                    }
+                    if path.is_some() && model_ready {
+                        ui.label(RichText::new("Found").color(ACCENT));
+                    } else {
+                        ui.label(RichText::new("Not found").color(MUTED));
+                    }
+                },
+            );
+            if let Some(p) = &path {
+                ui.label(
+                    RichText::new(format!("Found at {}", p.display()))
+                        .color(MUTED)
+                        .size(11.5),
+                );
+            }
+            if tool == Tool::Whisper {
+                let current = tools::model(&self.config.whisper_model).0;
+                ui.add_space(6.0);
+                row(
+                    ui,
+                    "Whisper model",
+                    "Bigger is more accurate and slower (MIT licence)",
+                    |ui| {
+                        ComboBox::from_id_salt("whisper-model")
+                            .width(180.0)
+                            .selected_text(current)
+                            .show_ui(ui, |ui| {
+                                for (name, dl) in &tools::MODELS {
+                                    let text = format!("{name} ({} MB)", dl.size / 1_000_000);
+                                    ui.selectable_value(
+                                        &mut self.config.whisper_model,
+                                        name.to_string(),
+                                        text,
+                                    );
+                                }
+                            });
+                        let text = if model_ready {
+                            "Downloaded"
+                        } else {
+                            "Not downloaded"
+                        };
+                        ui.label(RichText::new(text).color(if model_ready {
+                            ACCENT
+                        } else {
+                            MUTED
+                        }));
+                    },
+                );
+            }
+            if let Some((_, command)) = tool.installer() {
+                if self.confirm == Some(tool) {
+                    ui.label(
+                        RichText::new(format!("This opens a console window and runs: {command}"))
+                            .color(TEXT)
+                            .size(12.0),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button("Run").clicked() {
+                            tools::launch_installer(tool);
+                            self.confirm = None;
+                            self.tools_found = None;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.confirm = None;
+                        }
+                    });
+                    ui.add_space(8.0);
+                }
+            }
+            if page {
+                sys::open(tool.page());
+                self.feedback.set(tool.name(), Fb::Done, now);
+            }
+            if install {
+                self.confirm = Some(tool);
+            }
+            if download {
+                self.feedback.set(tool.exe(), Fb::Busy, now);
+                self.tool_error = None;
+                *self.tool_job.lock().unwrap() = ToolJob::default();
+                let job = self.tool_job.clone();
+                let ctx = ui.ctx().clone();
+                let model = self.config.whisper_model.clone();
+                std::thread::spawn(move || {
+                    let result = tools::install_whisper(&model, &mut |label, f| {
+                        let mut j = job.lock().unwrap();
+                        j.label = label.to_string();
+                        j.fraction = f;
+                        ctx.request_repaint();
+                    });
+                    job.lock().unwrap().result = Some(result);
+                    ctx.request_repaint();
+                });
+            }
+        }
+        if let Some(e) = &self.tool_error {
+            ui.label(RichText::new(e).color(ERROR));
+        }
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(format!("Downloads go to {}", tools::tools_dir().display()))
+                .color(MUTED)
+                .size(11.5),
+        );
+        ui.label(
+            RichText::new(
+                "Ghostscript is AGPL-3.0 and installed by its own installer. rembg is a Python package and fetches its model on first use.",
+            )
+            .color(MUTED)
+            .size(11.5),
+        );
+    }
+
     fn about(&mut self, ui: &mut Ui) {
         let now = ui.input(|i| i.time);
         ui.label(RichText::new("Crystal Converter").size(22.0).color(TEXT));
@@ -1293,6 +1481,7 @@ impl eframe::App for SettingsApp {
                         (Tab::General, "General"),
                         (Tab::Hotkeys, "Hotkeys"),
                         (Tab::Presets, "Presets"),
+                        (Tab::Tools, "Tools"),
                         (Tab::About, "About"),
                     ],
                     &mut tab,
@@ -1346,6 +1535,7 @@ impl eframe::App for SettingsApp {
                         Tab::General => self.general(ui),
                         Tab::Hotkeys => self.hotkeys(ui),
                         Tab::Presets => self.presets(ui),
+                        Tab::Tools => self.tools(ui),
                         Tab::About => self.about(ui),
                     });
                 self.scroll_max = (out.content_size.y - out.inner_rect.height()).max(0.0);
@@ -1379,6 +1569,7 @@ pub fn run(tab: Option<&str>) {
     let tab = match tab {
         Some("hotkeys") => Tab::Hotkeys,
         Some("presets") => Tab::Presets,
+        Some("tools") => Tab::Tools,
         Some("about") => Tab::About,
         _ => Tab::General,
     };
