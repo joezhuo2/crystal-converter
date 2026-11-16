@@ -15,6 +15,8 @@ use std::{
 const NO_WINDOW: u32 = 0x0800_0000;
 const WHITE_BG: &str = "format=rgba,split[fg][bg];[bg]lutrgb=r=255:g=255:b=255:a=255[w];[w][fg]overlay=format=auto,format=rgb24";
 const MIB_KBIT: f64 = 8192.0;
+const FAVICON_SIZES: [u32; 6] = [16, 32, 48, 64, 128, 256];
+const RINGTONE_MAX_SECS: &str = "40";
 
 pub enum Event {
     Progress {
@@ -115,6 +117,9 @@ fn convert(
     let out = unique_path(&dir, &stem(input), suffix.as_deref(), &fmt);
     let result = match category {
         Category::Document => office(input, &fmt, &out),
+        Category::Image if p.favicon => favicon(input, &out, cancel, progress),
+        Category::Image if p.lossless => lossless_png(input, &out, cancel, progress),
+        Category::Image if p.strip_gps => strip_gps_file(input, &out),
         Category::Image if fmt == "pdf" => images_to_pdf(group, &out, p, cancel, progress),
         _ => ffmpeg_convert(
             input,
@@ -267,6 +272,14 @@ fn base_args(input: &Path) -> Vec<String> {
 
 fn image_filters(p: &Preset) -> Vec<String> {
     let mut vf = Vec::new();
+    if let Some((w, h)) = parse_ratio(&p.crop) {
+        vf.push(format!(
+            "crop='if(gte(iw/ih,{w}/{h}),ih*{w}/{h},iw)':'if(gte(iw/ih,{w}/{h}),ih,iw*{h}/{w})'"
+        ));
+    }
+    if p.grayscale {
+        vf.push("hue=s=0".into());
+    }
     match p.rotate {
         90 => vf.push("transpose=1".into()),
         180 => vf.push("transpose=1,transpose=1".into()),
@@ -289,6 +302,43 @@ fn image_filters(p: &Preset) -> Vec<String> {
         vf.push(format!("fps={}", p.fps));
     }
     vf
+}
+
+fn parse_ratio(s: &str) -> Option<(u32, u32)> {
+    let (w, h) = s.split_once(':')?;
+    let (w, h) = (w.parse().ok()?, h.parse().ok()?);
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+fn audio_edit_filters(p: &Preset, duration: Option<f64>) -> (Vec<String>, Vec<String>) {
+    let mut head = Vec::new();
+    let mut tail = Vec::new();
+    let start = f64::from(p.cut_start.max(0.0));
+    if start > 0.0 || p.cut_len > 0.0 {
+        let mut t = format!("atrim=start={start}");
+        if p.cut_len > 0.0 {
+            t.push_str(&format!(":duration={}", p.cut_len));
+        }
+        head.push(t);
+        head.push("asetpts=PTS-STARTPTS".into());
+    }
+    if p.fade_s > 0.0 {
+        let len = match (duration.map(|d| d - start), p.cut_len > 0.0) {
+            (Some(a), true) => Some(a.min(f64::from(p.cut_len))),
+            (Some(a), false) => Some(a),
+            (None, true) => Some(f64::from(p.cut_len)),
+            (None, false) => None,
+        };
+        let fade = len.map_or(f64::from(p.fade_s), |l| f64::from(p.fade_s).min(l / 2.0));
+        tail.push(format!("afade=t=in:d={fade:.3}"));
+        if let Some(l) = len {
+            tail.push(format!("afade=t=out:st={:.3}:d={fade:.3}", l - fade));
+        }
+    }
+    if p.speed > 0.0 && p.speed != 1.0 {
+        tail.push(format!("atempo={}", p.speed.clamp(0.5, 100.0)));
+    }
+    (head, tail)
 }
 
 pub fn target_bitrates(max_mb: f32, duration: Option<f64>, audio: bool) -> Option<(u32, u32)> {
@@ -317,7 +367,10 @@ pub fn build_args(
     let mut a = base_args(input);
     let mut vf = image_filters(p);
     let mut af: Vec<String> = Vec::new();
-    let audio_out = matches!(fmt, "mp3" | "wav" | "flac" | "opus" | "ogg" | "m4a" | "aac");
+    let audio_out = matches!(
+        fmt,
+        "mp3" | "wav" | "flac" | "opus" | "ogg" | "m4a" | "m4r" | "aac"
+    );
     let h264 = matches!(fmt, "mp4" | "m4v" | "mov" | "mkv");
     let anim_gif_in = category == Category::Image && ext_of(input) == "gif";
     let audio = info.has_audio && !p.mute;
@@ -366,6 +419,10 @@ pub fn build_args(
                 .into(),
         );
     }
+
+    let (edit_head, edit_tail) = audio_edit_filters(p, info.duration);
+    af.splice(0..0, edit_head);
+    af.extend(edit_tail);
 
     let abr = |default: u32| -> String {
         let kbps = match (p.bitrate_kbps, target) {
@@ -470,6 +527,20 @@ pub fn build_args(
             "-b:a".into(),
             abr(192),
         ]),
+        "m4r" => push(
+            &mut a,
+            &[
+                "-vn",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-t",
+                RINGTONE_MAX_SECS,
+                "-f",
+                "ipod",
+            ],
+        ),
         "wav" => push(&mut a, &["-vn", "-c:a", "pcm_s16le"]),
         "flac" => push(&mut a, &["-vn", "-c:a", "flac"]),
         "opus" => a.extend([
@@ -550,6 +621,220 @@ pub fn build_args(
     }
     a.push(out.to_string_lossy().into());
     a
+}
+
+fn temp_file(ext: &str) -> PathBuf {
+    env::temp_dir().join(format!(
+        "crystal-converter-{}-{}.{ext}",
+        std::process::id(),
+        next_id()
+    ))
+}
+
+fn favicon(
+    input: &Path,
+    out: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<(), String> {
+    let mut frames = Vec::new();
+    for (i, size) in FAVICON_SIZES.into_iter().enumerate() {
+        let tmp = temp_file("png");
+        let mut args = base_args(input);
+        args.extend([
+            "-vf".into(),
+            format!("scale={size}:{size}:force_original_aspect_ratio=decrease,pad={size}:{size}:(ow-iw)/2:(oh-ih)/2:color=black@0,format=rgba"),
+            "-frames:v".into(),
+            "1".into(),
+            "-update".into(),
+            "1".into(),
+            tmp.to_string_lossy().into(),
+        ]);
+        let png = run_ffmpeg(&args, None, cancel, &mut |_| {})
+            .and_then(|_| fs::read(&tmp).map_err(|e| e.to_string()));
+        let _ = fs::remove_file(&tmp);
+        frames.push((size, png?));
+        progress((i + 1) as f32 / FAVICON_SIZES.len() as f32);
+    }
+    fs::write(out, ico_from_pngs(&frames)).map_err(|e| e.to_string())
+}
+
+pub fn ico_from_pngs(frames: &[(u32, Vec<u8>)]) -> Vec<u8> {
+    let mut out = vec![0, 0, 1, 0];
+    out.extend((frames.len() as u16).to_le_bytes());
+    let mut offset = 6 + 16 * frames.len() as u32;
+    for (size, png) in frames {
+        let dim = if *size >= 256 { 0 } else { *size as u8 };
+        out.extend([dim, dim, 0, 0, 1, 0, 32, 0]);
+        out.extend((png.len() as u32).to_le_bytes());
+        out.extend(offset.to_le_bytes());
+        offset += png.len() as u32;
+    }
+    for (_, png) in frames {
+        out.extend_from_slice(png);
+    }
+    out
+}
+
+fn lossless_png(
+    input: &Path,
+    out: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<(), String> {
+    let data = fs::read(input).map_err(|e| e.to_string())?;
+    if !data.starts_with(b"\x89PNG") {
+        return Err("lossless compression works on PNG files only".into());
+    }
+    if data.windows(4).any(|w| w == b"acTL") {
+        return Err("animated PNG is not supported".into());
+    }
+    let mut args = base_args(input);
+    push(
+        &mut args,
+        &[
+            "-c:v",
+            "png",
+            "-compression_level",
+            "9",
+            "-pred",
+            "mixed",
+            "-frames:v",
+            "1",
+            "-update",
+            "1",
+        ],
+    );
+    args.push(out.to_string_lossy().into());
+    run_ffmpeg(&args, None, cancel, progress)?;
+    if fs::metadata(out).map_or(true, |m| m.len() >= data.len() as u64) {
+        fs::write(out, &data).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn strip_gps_file(input: &Path, out: &Path) -> Result<(), String> {
+    let mut data = fs::read(input).map_err(|e| e.to_string())?;
+    strip_gps(&mut data)?;
+    fs::write(out, data).map_err(|e| e.to_string())
+}
+
+fn scrub_exif_gps(t: &mut [u8]) {
+    let big = match t.get(..2) {
+        Some(b"MM") => true,
+        Some(b"II") => false,
+        _ => return,
+    };
+    let u16_at = |t: &[u8], o: usize| -> Option<usize> {
+        let b: [u8; 2] = t.get(o..o + 2)?.try_into().ok()?;
+        Some(usize::from(if big {
+            u16::from_be_bytes(b)
+        } else {
+            u16::from_le_bytes(b)
+        }))
+    };
+    let u32_at = |t: &[u8], o: usize| -> Option<usize> {
+        let b: [u8; 4] = t.get(o..o + 4)?.try_into().ok()?;
+        Some(if big {
+            u32::from_be_bytes(b)
+        } else {
+            u32::from_le_bytes(b)
+        } as usize)
+    };
+    let Some(ifd0) = u32_at(t, 4) else { return };
+    let Some(n) = u16_at(t, ifd0) else { return };
+    let entries = ifd0 + 2;
+    let end = entries + 12 * n;
+    if end + 4 > t.len() {
+        return;
+    }
+    let Some(i) = (0..n).find(|i| u16_at(t, entries + 12 * i) == Some(0x8825)) else {
+        return;
+    };
+    if let Some(gps) = u32_at(t, entries + 12 * i + 8) {
+        if let Some(gn) = u16_at(t, gps) {
+            let table = gps + 2;
+            if table + 12 * gn + 4 <= t.len() {
+                for j in 0..gn {
+                    let e = table + 12 * j;
+                    let unit = match u16_at(t, e + 2) {
+                        Some(3 | 8) => 2,
+                        Some(4 | 9 | 11) => 4,
+                        Some(5 | 10 | 12) => 8,
+                        _ => 1,
+                    };
+                    let size = u32_at(t, e + 4).unwrap_or(0).saturating_mul(unit);
+                    if size > 4 {
+                        let off = u32_at(t, e + 8).unwrap_or(usize::MAX);
+                        if let Some(data) = t.get_mut(off..off.saturating_add(size)) {
+                            data.fill(0);
+                        }
+                    }
+                }
+                t[gps..table + 12 * gn + 4].fill(0);
+            }
+        }
+    }
+    t.copy_within(entries + 12 * (i + 1)..end + 4, entries + 12 * i);
+    t[end - 8..end + 4].fill(0);
+    let count = (n as u16 - 1).to_be_bytes();
+    let count = if big { count } else { [count[1], count[0]] };
+    t[ifd0..ifd0 + 2].copy_from_slice(&count);
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for b in data {
+        crc ^= u32::from(*b);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xEDB8_8320 & 0u32.wrapping_sub(crc & 1));
+        }
+    }
+    !crc
+}
+
+pub fn strip_gps(d: &mut [u8]) -> Result<(), String> {
+    if d.starts_with(b"\xFF\xD8") {
+        let mut i = 2;
+        while i + 4 <= d.len() && d[i] == 0xFF && d[i + 1] != 0xDA {
+            let len = usize::from(u16::from_be_bytes([d[i + 2], d[i + 3]]));
+            let end = (i + 2 + len).min(d.len());
+            if d[i + 1] == 0xE1 && end >= i + 4 && d[i + 4..end].starts_with(b"Exif\0\0") {
+                scrub_exif_gps(&mut d[i + 10..end]);
+            }
+            i = end;
+        }
+    } else if d.starts_with(b"\x89PNG\r\n\x1a\n") {
+        let mut i = 8;
+        while i + 12 <= d.len() {
+            let len = u32::from_be_bytes([d[i], d[i + 1], d[i + 2], d[i + 3]]) as usize;
+            let end = (i + 8 + len).min(d.len());
+            if &d[i + 4..i + 8] == b"eXIf" && end + 4 <= d.len() {
+                scrub_exif_gps(&mut d[i + 8..end]);
+                let crc = crc32(&d[i + 4..end]).to_be_bytes();
+                d[end..end + 4].copy_from_slice(&crc);
+            }
+            i = end + 4;
+        }
+    } else if d.starts_with(b"RIFF") && d.get(8..12) == Some(b"WEBP") {
+        let mut i = 12;
+        while i + 8 <= d.len() {
+            let len = u32::from_le_bytes([d[i + 4], d[i + 5], d[i + 6], d[i + 7]]) as usize;
+            let end = (i + 8 + len).min(d.len());
+            if &d[i..i + 4] == b"EXIF" {
+                let skip = if d[i + 8..end].starts_with(b"Exif\0\0") {
+                    6
+                } else {
+                    0
+                };
+                scrub_exif_gps(&mut d[i + 8 + skip..end]);
+            }
+            i = end + (len & 1);
+        }
+    } else {
+        return Err("GPS removal supports JPEG, PNG and WebP only".into());
+    }
+    Ok(())
 }
 
 fn path_dirs() -> Vec<PathBuf> {
@@ -1014,6 +1299,112 @@ mod tests {
             Some("h264_nvenc"),
         );
         assert!(a.contains(&"-maxrate".to_string()) && a.contains(&"h264_nvenc".to_string()));
+    }
+
+    fn exif_with_gps() -> Vec<u8> {
+        let mut t = b"II*\0\x08\0\0\0".to_vec();
+        t.extend([2, 0]);
+        t.extend([0x0F, 0x01, 2, 0, 3, 0, 0, 0, b'A', b'B', 0, 0]);
+        t.extend([0x25, 0x88, 4, 0, 1, 0, 0, 0, 38, 0, 0, 0]);
+        t.extend([0, 0, 0, 0]);
+        assert_eq!(t.len(), 38);
+        t.extend([2, 0]);
+        t.extend([2, 0, 5, 0, 3, 0, 0, 0, 68, 0, 0, 0]);
+        t.extend([1, 0, 2, 0, 2, 0, 0, 0, b'N', 0, 0, 0]);
+        t.extend([0, 0, 0, 0]);
+        assert_eq!(t.len(), 68);
+        t.extend((0..24u8).map(|i| 0xA0 + i));
+        t
+    }
+
+    #[test]
+    fn strips_only_gps_from_jpeg_and_png() {
+        let tiff = exif_with_gps();
+        let mut jpg = b"\xFF\xD8\xFF\xE1".to_vec();
+        jpg.extend(((tiff.len() + 8) as u16).to_be_bytes());
+        jpg.extend(b"Exif\0\0");
+        jpg.extend(&tiff);
+        jpg.extend(b"\xFF\xDA\0\x02");
+        strip_gps(&mut jpg).unwrap();
+        let t = &jpg[12..12 + tiff.len()];
+        assert_eq!(&t[8..10], [1, 0]);
+        assert_eq!(&t[10..16], [0x0F, 0x01, 2, 0, 3, 0]);
+        assert!(t[22..].iter().all(|b| *b == 0));
+        assert!(!jpg.contains(&0xA5) && !jpg.contains(&b'N'));
+
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend((tiff.len() as u32).to_be_bytes());
+        png.extend(b"eXIf");
+        png.extend(&tiff);
+        png.extend(crc32(&[b"eXIf".as_slice(), &tiff].concat()).to_be_bytes());
+        strip_gps(&mut png).unwrap();
+        let end = 16 + tiff.len();
+        assert_eq!(
+            u32::from_be_bytes(png[end..end + 4].try_into().unwrap()),
+            crc32(&png[12..end])
+        );
+        assert!(!png.contains(&0xA5));
+        assert!(strip_gps(&mut b"GIF89a".to_vec()).is_err());
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+    }
+
+    #[test]
+    fn ico_container_lists_every_size() {
+        let ico = ico_from_pngs(&[(16, vec![1; 5]), (256, vec![2; 7])]);
+        assert_eq!(&ico[..6], [0, 0, 1, 0, 2, 0]);
+        assert_eq!(ico[6], 16);
+        assert_eq!(ico[22], 0);
+        assert_eq!(u32::from_le_bytes(ico[14..18].try_into().unwrap()), 5);
+        assert_eq!(u32::from_le_bytes(ico[18..22].try_into().unwrap()), 38);
+        assert_eq!(u32::from_le_bytes(ico[34..38].try_into().unwrap()), 43);
+        assert_eq!(ico.len(), 50);
+    }
+
+    #[test]
+    fn builds_image_and_audio_edit_args() {
+        let crop = Preset {
+            crop: "16:9".into(),
+            grayscale: true,
+            ..Preset::default()
+        };
+        let vf = image_filters(&crop);
+        assert!(vf[0].starts_with("crop='if(gte(iw/ih,16/9)") && vf[1] == "hue=s=0");
+        assert_eq!(parse_ratio("x"), None);
+        assert_eq!(parse_ratio("0:1"), None);
+        let p = Preset {
+            cut_start: 5.0,
+            cut_len: 30.0,
+            fade_s: 2.0,
+            speed: 1.5,
+            ..Preset::default()
+        };
+        let (head, tail) = audio_edit_filters(&p, Some(100.0));
+        assert_eq!(head[0], "atrim=start=5:duration=30");
+        assert_eq!(
+            tail,
+            [
+                "afade=t=in:d=2.000",
+                "afade=t=out:st=28.000:d=2.000",
+                "atempo=1.5"
+            ]
+        );
+        let info = Info {
+            duration: Some(100.0),
+            has_audio: true,
+            has_video: false,
+        };
+        let a = build_args(
+            Path::new("in.mp3"),
+            Path::new("o.m4r"),
+            "m4r",
+            Category::Audio,
+            &p,
+            &info,
+            None,
+        );
+        assert!(a.windows(2).any(|w| w == ["-t", "40"]));
+        assert!(a.windows(2).any(|w| w == ["-f", "ipod"]));
+        assert!(a.iter().any(|x| x.starts_with("atrim=")));
     }
 
     #[test]
