@@ -48,7 +48,7 @@ const KEY_NAMES: &[(u32, &str)] = &[
 const IGNORED_KEYS: &[u32] = &[
     0x01, 0x02, 0x04, 0x05, 0x06, 0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5,
 ];
-const DEFAULT_KEYS: [u32; 2] = [0xC0, 0x14];
+const DEFAULT_KEYS: [u32; 4] = [0xC0, 0x14, 0x45, 0x56];
 
 pub fn key_name(vk: u32) -> String {
     if let Some((_, n)) = KEY_NAMES.iter().find(|(k, _)| *k == vk) {
@@ -848,9 +848,11 @@ impl SettingsApp {
             if let Some(vk) = down.iter().find(|k| !before.contains(k)) {
                 if *vk != 0x1B {
                     *self.key_mut(which) = *vk;
-                    self.feedback.set(["rec0", "rec1"][which], Fb::Done, now);
+                    self.feedback
+                        .set(["rec0", "rec1", "rec2", "rec3"][which], Fb::Done, now);
                 } else {
-                    self.feedback.set(["rec0", "rec1"][which], Fb::Idle, now);
+                    self.feedback
+                        .set(["rec0", "rec1", "rec2", "rec3"][which], Fb::Idle, now);
                 }
                 self.recording = None;
             } else {
@@ -863,20 +865,32 @@ impl SettingsApp {
         for (which, label, hint) in [
             (0, "Convert wheel", "Change the file format"),
             (1, "Modify wheel", "Quality, size, volume"),
+            (2, "Explorer selection", "Open the wheel for selected files"),
+            (3, "Clipboard", "Open the wheel for copied files or image"),
         ] {
             let key = *self.key_mut(which);
             let recording = self.recording.as_ref().is_some_and(|(w, _)| *w == which);
-            let rec_id = ["rec0", "rec1"][which];
-            let reset_id = ["reset0", "reset1"][which];
+            let rec_id = ["rec0", "rec1", "rec2", "rec3"][which];
+            let reset_id = ["reset0", "reset1", "reset2", "reset3"][which];
             let mut start_recording = false;
             let mut reset = false;
+            let mut turn_off = false;
             row(ui, label, hint, |ui| {
                 let text = if recording {
                     "Press a key".to_string()
-                } else {
+                } else if which < 2 {
                     key_name(key)
+                } else if key == 0 {
+                    "Off".to_string()
+                } else {
+                    format!("Ctrl+Alt+Shift+{}", key_name(key))
                 };
                 start_recording = self.feedback.button(ui, rec_id, Icon::Key, &text);
+                if which >= 2 && key != 0 {
+                    turn_off =
+                        self.feedback
+                            .button(ui, ["off2", "off3"][which - 2], Icon::Trash, "");
+                }
                 if key != DEFAULT_KEYS[which] {
                     reset = self.feedback.button(ui, reset_id, Icon::Reset, "");
                 }
@@ -884,6 +898,9 @@ impl SettingsApp {
             if start_recording {
                 self.recording = Some((which, keys_down()));
                 self.feedback.set(rec_id, Fb::Busy, now);
+            }
+            if turn_off {
+                *self.key_mut(which) = 0;
             }
             if reset {
                 *self.key_mut(which) = DEFAULT_KEYS[which];
@@ -896,14 +913,15 @@ impl SettingsApp {
             );
         }
         ui.add_space(8.0);
-        ui.label(RichText::new("Click a key, then press the one you want. Esc cancels. Shift, Ctrl, Alt and Win change what a drag does, so they can't be used.").color(MUTED));
+        ui.label(RichText::new("Click a key, then press the one you want. Esc cancels. Shift, Ctrl, Alt and Win change what a drag does, so they can't be used. The Explorer and Clipboard hotkeys are pressed together with Ctrl+Alt+Shift; the trash button turns one off.").color(MUTED));
     }
 
     fn key_mut(&mut self, which: usize) -> &mut u32 {
-        if which == 0 {
-            &mut self.config.convert_key
-        } else {
-            &mut self.config.modify_key
+        match which {
+            0 => &mut self.config.convert_key,
+            1 => &mut self.config.modify_key,
+            2 => &mut self.config.selection_key,
+            _ => &mut self.config.clipboard_key,
         }
     }
 
