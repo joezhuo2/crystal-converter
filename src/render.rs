@@ -357,9 +357,11 @@ pub struct Scene<'a> {
     pub time: f32,
     pub button_hover: [f32; 2],
     pub tooltip: Option<(usize, &'a str)>,
+    pub stats: &'a str,
 }
 
 pub const BUTTON_TIPS: [&str; 2] = ["Show in folder", "Copy to clipboard"];
+pub const ERROR_TIPS: [&str; 2] = ["Copy error", "Open log"];
 
 fn draw_base(pm: &mut Pixmap, c: f32, u: f32, r_out: f32, ga: f32) {
     if let Some(shader) = RadialGradient::new(
@@ -649,6 +651,16 @@ fn draw_status(
                 MUTED,
                 a,
             );
+            draw_text(
+                pm,
+                &fonts.regular,
+                12.0 * u,
+                s.stats,
+                c,
+                c + 72.0 * u,
+                MUTED,
+                a * 0.8,
+            );
         }
         Status::Done => {
             let pop = ease_out_back((t / 0.3).min(1.0));
@@ -676,81 +688,7 @@ fn draw_status(
                 MUTED,
                 a,
             );
-            let by = c + BUTTON_Y * u;
-            for (i, bx) in [-BUTTON_DX, BUTTON_DX].into_iter().enumerate() {
-                let x = c + bx * u;
-                let h = s.button_hover[i];
-                fill(
-                    pm,
-                    circle(x, by, BUTTON_R * u),
-                    rgba((255, 255, 255), a * (0.08 + 0.16 * h)),
-                );
-                let ic = rgba(mix(TEXT, DONE, h), a);
-                if i == 0 {
-                    stroke_path(
-                        pm,
-                        polyline(
-                            &[
-                                (-8.0, -5.5),
-                                (-3.0, -5.5),
-                                (-1.0, -3.0),
-                                (8.0, -3.0),
-                                (8.0, 6.0),
-                                (-8.0, 6.0),
-                            ],
-                            x,
-                            by,
-                            u,
-                            true,
-                        ),
-                        ic,
-                        1.8 * u,
-                        None,
-                    );
-                } else {
-                    stroke_path(
-                        pm,
-                        polyline(
-                            &[(-6.0, -5.0), (6.0, -5.0), (6.0, 8.0), (-6.0, 8.0)],
-                            x,
-                            by,
-                            u,
-                            true,
-                        ),
-                        ic,
-                        1.8 * u,
-                        None,
-                    );
-                    stroke_path(
-                        pm,
-                        polyline(
-                            &[(-3.0, -8.0), (3.0, -8.0), (3.0, -3.5), (-3.0, -3.5)],
-                            x,
-                            by,
-                            u,
-                            true,
-                        ),
-                        ic,
-                        1.8 * u,
-                        None,
-                    );
-                }
-            }
-            if let Some((i, tip)) = s.tooltip {
-                let px = 11.5 * u;
-                let w = text_width(&fonts.regular, px, tip) + 16.0 * u;
-                let x = c + [-BUTTON_DX, BUTTON_DX][i] * u;
-                let ty = by + 33.0 * u;
-                let a2 = a * s.button_hover[i];
-                if let Some(rect) =
-                    tiny_skia::Rect::from_xywh(x - w / 2.0, ty - 11.0 * u, w, 22.0 * u)
-                {
-                    let mut pb = PathBuilder::new();
-                    pb.push_rect(rect);
-                    fill(pm, pb.finish(), rgba(DARK, 0.92 * a2));
-                }
-                draw_text(pm, &fonts.regular, px, tip, x, ty, TEXT, a2);
-            }
+            draw_buttons(pm, s, status, fonts, c, u, a);
         }
         Status::Error => {
             let shake = (t * 38.0).sin() * (-t * 7.0).exp() * 7.0 * u;
@@ -776,7 +714,84 @@ fn draw_status(
                 MUTED,
                 a,
             );
+            draw_buttons(pm, s, status, fonts, c, u, a);
         }
+    }
+}
+
+fn draw_buttons(pm: &mut Pixmap, s: &Scene, status: Status, fonts: &Fonts, c: f32, u: f32, a: f32) {
+    let by = c + BUTTON_Y * u;
+    for (i, bx) in [-BUTTON_DX, BUTTON_DX].into_iter().enumerate() {
+        let x = c + bx * u;
+        let h = s.button_hover[i];
+        fill(
+            pm,
+            circle(x, by, BUTTON_R * u),
+            rgba((255, 255, 255), a * (0.08 + 0.16 * h)),
+        );
+        let ic = rgba(mix(TEXT, DONE, h), a);
+        if (i == 0) == (status == Status::Done) {
+            stroke_path(
+                pm,
+                polyline(
+                    &[
+                        (-8.0, -5.5),
+                        (-3.0, -5.5),
+                        (-1.0, -3.0),
+                        (8.0, -3.0),
+                        (8.0, 6.0),
+                        (-8.0, 6.0),
+                    ],
+                    x,
+                    by,
+                    u,
+                    true,
+                ),
+                ic,
+                1.8 * u,
+                None,
+            );
+        } else {
+            stroke_path(
+                pm,
+                polyline(
+                    &[(-6.0, -5.0), (6.0, -5.0), (6.0, 8.0), (-6.0, 8.0)],
+                    x,
+                    by,
+                    u,
+                    true,
+                ),
+                ic,
+                1.8 * u,
+                None,
+            );
+            stroke_path(
+                pm,
+                polyline(
+                    &[(-3.0, -8.0), (3.0, -8.0), (3.0, -3.5), (-3.0, -3.5)],
+                    x,
+                    by,
+                    u,
+                    true,
+                ),
+                ic,
+                1.8 * u,
+                None,
+            );
+        }
+    }
+    if let Some((i, tip)) = s.tooltip {
+        let px = 11.5 * u;
+        let w = text_width(&fonts.regular, px, tip) + 16.0 * u;
+        let x = c + [-BUTTON_DX, BUTTON_DX][i] * u;
+        let ty = by + 33.0 * u;
+        let a2 = a * s.button_hover[i];
+        if let Some(rect) = tiny_skia::Rect::from_xywh(x - w / 2.0, ty - 11.0 * u, w, 22.0 * u) {
+            let mut pb = PathBuilder::new();
+            pb.push_rect(rect);
+            fill(pm, pb.finish(), rgba(DARK, 0.92 * a2));
+        }
+        draw_text(pm, &fonts.regular, px, tip, x, ty, TEXT, a2);
     }
 }
 

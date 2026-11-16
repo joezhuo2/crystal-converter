@@ -1,18 +1,20 @@
 use crate::config::{Category, Preset};
 use crate::formats::{detect, ext_of};
 use std::{
+    cell::Cell,
     env, fs,
     io::{self, BufRead, BufReader, Read},
     os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
-        OnceLock,
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
+        mpsc, OnceLock,
     },
 };
 
 const NO_WINDOW: u32 = 0x0800_0000;
+const BELOW_NORMAL_PRIORITY: u32 = 0x0000_4000;
 const WHITE_BG: &str = "format=rgba,split[fg][bg];[bg]lutrgb=r=255:g=255:b=255:a=255[w];[w][fg]overlay=format=auto,format=rgb24";
 const MIB_KBIT: f64 = 8192.0;
 
@@ -22,10 +24,12 @@ pub enum Event {
         total: usize,
         fraction: Option<f32>,
         name: String,
+        speed: Option<f32>,
     },
     Done {
         outputs: Vec<PathBuf>,
         failed: Vec<String>,
+        total: usize,
     },
     Failed(String),
     Cancelled,
@@ -36,6 +40,18 @@ pub struct Job {
     pub preset: Preset,
     pub out_dir: Option<PathBuf>,
     pub hardware: bool,
+    pub parallel: usize,
+    pub replace_original: bool,
+}
+
+enum Msg {
+    Start(usize),
+    Frac(usize, f32, Option<f32>),
+    End(usize, Result<Vec<PathBuf>, String>),
+}
+
+thread_local! {
+    static SPEED: Cell<Option<f32>> = const { Cell::new(None) };
 }
 
 #[derive(Default, Debug, PartialEq)]
@@ -54,38 +70,102 @@ pub fn run(job: Job, cancel: &AtomicBool, emit: &mut dyn FnMut(Event)) {
         job.files.iter().map(|f| vec![f.clone()]).collect()
     };
     let total = groups.len();
+    let light = groups
+        .iter()
+        .all(|g| matches!(detect(&g[0]), Some(Category::Image | Category::Audio)));
+    let workers = if light {
+        job.parallel.min(total).max(1)
+    } else {
+        1
+    };
+    let next = AtomicUsize::new(0);
+    let (tx, rx) = mpsc::channel();
+    let mut results: Vec<Option<Result<Vec<PathBuf>, String>>> = vec![None; total];
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let tx = tx.clone();
+            let (groups, job, next) = (&groups, &job, &next);
+            scope.spawn(move || loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= groups.len() || cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                let _ = tx.send(Msg::Start(i));
+                let result = convert(&groups[i], job, cancel, &mut |f| {
+                    let _ = tx.send(Msg::Frac(i, f, SPEED.take()));
+                });
+                if let Ok(outputs) = &result {
+                    if job.replace_original
+                        && !cancel.load(Ordering::Relaxed)
+                        && replaceable(&groups[i], outputs)
+                    {
+                        crate::sys::recycle(&groups[i]);
+                    }
+                }
+                let _ = tx.send(Msg::End(i, result));
+            });
+        }
+        drop(tx);
+        let mut frac = vec![0f32; total];
+        let mut done = 0;
+        let mut name = String::new();
+        let mut speed = None;
+        for msg in rx {
+            match msg {
+                Msg::Start(i) => name = file_name(&groups[i][0]),
+                Msg::Frac(i, f, s) => {
+                    frac[i] = f;
+                    speed = s.filter(|_| workers == 1);
+                }
+                Msg::End(i, result) => {
+                    frac[i] = 1.0;
+                    done += 1;
+                    results[i] = Some(result);
+                    continue;
+                }
+            }
+            let overall = frac.iter().sum::<f32>() / total as f32;
+            emit(Event::Progress {
+                index: done.min(total - 1),
+                total,
+                fraction: (overall > 0.0).then_some(overall),
+                name: name.clone(),
+                speed,
+            });
+        }
+    });
+    if cancel.load(Ordering::Relaxed) {
+        emit(Event::Cancelled);
+        return;
+    }
     let mut outputs = Vec::new();
     let mut failed = Vec::new();
-    for (index, group) in groups.iter().enumerate() {
-        let name = file_name(&group[0]);
-        emit(Event::Progress {
-            index,
-            total,
-            fraction: None,
-            name: name.clone(),
-        });
-        let result = convert(group, &job, cancel, &mut |f| {
-            emit(Event::Progress {
-                index,
-                total,
-                fraction: Some(f),
-                name: name.clone(),
-            })
-        });
-        if cancel.load(Ordering::Relaxed) {
-            emit(Event::Cancelled);
-            return;
-        }
+    for (group, result) in groups.iter().zip(results) {
         match result {
-            Ok(p) => outputs.extend(p),
-            Err(e) => failed.push(format!("{name}: {e}")),
+            Some(Ok(p)) => outputs.extend(p),
+            Some(Err(e)) => failed.push(format!("{}: {e}", file_name(&group[0]))),
+            None => {}
         }
     }
     emit(if outputs.is_empty() {
-        Event::Failed(failed.join("\n"))
+        Event::Failed(failed.join(
+            "
+",
+        ))
     } else {
-        Event::Done { outputs, failed }
+        Event::Done {
+            outputs,
+            failed,
+            total,
+        }
     });
+}
+
+fn replaceable(sources: &[PathBuf], outputs: &[PathBuf]) -> bool {
+    !outputs.is_empty()
+        && outputs.iter().all(|o| {
+            !sources.contains(o) && fs::metadata(o).is_ok_and(|m| m.is_file() && m.len() > 0)
+        })
 }
 
 fn convert(
@@ -592,18 +672,80 @@ fn spawn_err(e: io::Error) -> String {
 
 fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut c = Command::new(program);
-    c.creation_flags(NO_WINDOW).stdin(Stdio::null());
+    c.creation_flags(NO_WINDOW | BELOW_NORMAL_PRIORITY)
+        .stdin(Stdio::null());
     c
 }
 
 pub fn probe(input: &Path) -> Result<Info, String> {
+    probe_meta(input).map(|(info, _)| info)
+}
+
+pub fn probe_meta(input: &Path) -> Result<(Info, Option<(u32, u32)>), String> {
     let out = command(ffmpeg())
         .arg("-hide_banner")
         .arg("-i")
         .arg(input)
         .output()
         .map_err(spawn_err)?;
-    Ok(parse_probe(&String::from_utf8_lossy(&out.stderr)))
+    let text = String::from_utf8_lossy(&out.stderr);
+    Ok((parse_probe(&text), parse_dims(&text)))
+}
+
+fn parse_dims(text: &str) -> Option<(u32, u32)> {
+    text.split("Video:")
+        .nth(1)?
+        .lines()
+        .next()?
+        .split([' ', ','])
+        .find_map(|t| {
+            let (w, h) = t.split_once('x')?;
+            let (w, h) = (w.parse::<u32>().ok()?, h.parse::<u32>().ok()?);
+            (w > 0 && h > 0).then_some((w, h))
+        })
+}
+
+fn parse_speed(line: &str) -> Option<f32> {
+    line.strip_prefix("speed=")?
+        .trim()
+        .strip_suffix('x')?
+        .trim()
+        .parse()
+        .ok()
+}
+
+fn fmt_size(bytes: f64) -> String {
+    let mb = bytes / 1048576.0;
+    if mb >= 1024.0 {
+        format!("{:.1} GB", mb / 1024.0)
+    } else if mb >= 1.0 {
+        format!("{mb:.1} MB")
+    } else {
+        format!("{:.0} KB", bytes / 1024.0)
+    }
+}
+
+pub fn estimate(p: &Preset, size: u64, info: &Info, dims: Option<(u32, u32)>) -> Option<String> {
+    if p.max_size_mb > 0.0 && f64::from(p.max_size_mb) * 1048576.0 < size as f64 {
+        let audio = info.has_audio && !p.mute;
+        if let Some((v, a)) = target_bitrates(p.max_size_mb, info.duration, audio) {
+            let bytes = f64::from(v + a) * 125.0 * info.duration.unwrap_or_default();
+            return Some(format!("~{}", fmt_size(bytes)));
+        }
+    }
+    let (w, h) = dims?;
+    let (mut nw, mut nh) = (f64::from(w), f64::from(h));
+    if p.scale_pct > 0 && p.scale_pct < 100 {
+        let f = f64::from(p.scale_pct) / 100.0;
+        (nw, nh) = (nw * f, nh * f);
+    }
+    let longest = nw.max(nh);
+    if p.max_dim > 0 && longest > f64::from(p.max_dim) {
+        let f = f64::from(p.max_dim) / longest;
+        (nw, nh) = (nw * f, nh * f);
+    }
+    let (nw, nh) = (nw.round() as u32, nh.round() as u32);
+    (nw != w || nh != h).then(|| format!("~{nw}×{nh}"))
 }
 
 fn parse_probe(text: &str) -> Info {
@@ -641,13 +783,18 @@ fn run_ffmpeg(
         s
     });
     let stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
+    let mut speed = None;
     for line in stdout.lines().map_while(Result::ok) {
         if cancel.load(Ordering::Relaxed) {
             let _ = child.kill();
             break;
         }
+        if let Some(s) = parse_speed(&line) {
+            speed = Some(s);
+        }
         if let (Some(d), Some(us)) = (duration, line.strip_prefix("out_time_us=")) {
             if let Ok(us) = us.trim().parse::<f64>() {
+                SPEED.set(speed);
                 progress((us / 1e6 / d).clamp(0.0, 1.0) as f32);
             }
         }
@@ -926,6 +1073,68 @@ mod tests {
     }
 
     #[test]
+    fn parses_speed_and_dims() {
+        assert_eq!(parse_speed("speed=1.85x"), Some(1.85));
+        assert_eq!(parse_speed("speed=  12x"), Some(12.0));
+        assert_eq!(parse_speed("speed=N/A"), None);
+        let dims = parse_dims(
+            "Stream #0:0: Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv), 1920x1080 [SAR 1:1 DAR 16:9], 30 fps",
+        );
+        assert_eq!(dims, Some((1920, 1080)));
+        assert_eq!(parse_dims("Audio: aac"), None);
+    }
+
+    #[test]
+    fn estimates_size_and_dimensions() {
+        let info = Info {
+            duration: Some(60.0),
+            has_audio: true,
+            has_video: true,
+        };
+        let small = Preset {
+            max_size_mb: 8.0,
+            ..Preset::default()
+        };
+        assert_eq!(
+            estimate(&small, 100 << 20, &info, None).as_deref(),
+            Some("~7.2 MB")
+        );
+        assert_eq!(estimate(&small, 4 << 20, &info, None), None);
+        let half = Preset {
+            scale_pct: 50,
+            ..Preset::default()
+        };
+        assert_eq!(
+            estimate(&half, 0, &info, Some((1920, 1080))).as_deref(),
+            Some("~960×540")
+        );
+        let cap = Preset {
+            max_dim: 1280,
+            ..Preset::default()
+        };
+        assert_eq!(estimate(&cap, 0, &info, Some((640, 480))), None);
+    }
+
+    #[test]
+    fn replaces_only_with_real_output() {
+        let dir = env::temp_dir().join(format!("cc-rep-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let (src, out, empty) = (dir.join("a.png"), dir.join("a.jpg"), dir.join("e.jpg"));
+        fs::write(&out, b"x").unwrap();
+        fs::write(&empty, b"").unwrap();
+        let src = [src];
+        assert!(replaceable(&src, std::slice::from_ref(&out)));
+        assert!(!replaceable(&src, &[empty]));
+        assert!(!replaceable(&src, &[dir.join("missing.jpg")]));
+        assert!(!replaceable(&src, &[]));
+        assert!(!replaceable(
+            std::slice::from_ref(&out),
+            std::slice::from_ref(&out)
+        ));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn target_bitrate_fits_size() {
         let (v, a) = target_bitrates(10.0, Some(60.0), true).unwrap();
         let mb = f64::from(v + a) * 60.0 / MIB_KBIT;
@@ -1096,6 +1305,8 @@ mod tests {
                     preset,
                     out_dir: None,
                     hardware: false,
+                    parallel: 1,
+                    replace_original: false,
                 },
                 &cancel,
                 &mut |e| {
