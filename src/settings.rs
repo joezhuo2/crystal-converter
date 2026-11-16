@@ -667,6 +667,9 @@ struct SettingsApp {
     recording: Option<(usize, Vec<u32>)>,
     deps: Option<(bool, bool)>,
     installs: Arc<Mutex<Vec<(&'static str, bool)>>>,
+    preset_rec: Option<Vec<u32>>,
+    share: String,
+    share_msg: Option<(String, bool)>,
 }
 
 impl SettingsApp {
@@ -742,6 +745,9 @@ impl SettingsApp {
             recording: None,
             deps: None,
             installs: Arc::new(Mutex::new(Vec::new())),
+            preset_rec: None,
+            share: String::new(),
+            share_msg: None,
         }
     }
 
@@ -986,6 +992,62 @@ impl SettingsApp {
                 self.feedback.set("reset", Fb::Done, now);
             }
         });
+        ui.add_space(6.0);
+        let mut imported = None;
+        ui.horizontal(|ui| {
+            if self.feedback.button(ui, "pcopy", Icon::Copy, "Copy all") {
+                ui.ctx()
+                    .copy_text(config::export_presets(&self.config.presets));
+                self.share_msg = Some(("Copied to the clipboard".into(), true));
+                self.feedback.set("pcopy", Fb::Done, now);
+            }
+            if self
+                .feedback
+                .button(ui, "psave", Icon::Download, "Save file")
+            {
+                if let Some(path) = sys::pick_json(true) {
+                    self.share_msg = Some(
+                        match std::fs::write(path, config::export_presets(&self.config.presets)) {
+                            Ok(()) => ("Saved".into(), true),
+                            Err(e) => (e.to_string(), false),
+                        },
+                    );
+                }
+            }
+            if self
+                .feedback
+                .button(ui, "pfile", Icon::Folder, "Import file")
+            {
+                if let Some(path) = sys::pick_json(false) {
+                    imported = Some(
+                        std::fs::read_to_string(path)
+                            .map_err(|e| e.to_string())
+                            .and_then(|t| config::import_presets(&t)),
+                    );
+                }
+            }
+            if self.feedback.button(ui, "ptext", Icon::Plus, "Import text") {
+                imported = Some(config::import_presets(&self.share));
+            }
+        });
+        ui.add(
+            egui::TextEdit::singleline(&mut self.share)
+                .desired_width(f32::INFINITY)
+                .hint_text("Paste shared presets here, then Import text"),
+        );
+        match imported {
+            Some(Ok(list)) => {
+                self.selected = self.config.presets.len();
+                self.share_msg = Some((format!("Imported {} preset(s)", list.len()), true));
+                self.config.presets.extend(list);
+                self.share.clear();
+            }
+            Some(Err(e)) => self.share_msg = Some((e, false)),
+            None => {}
+        }
+        if let Some((msg, ok)) = &self.share_msg {
+            ui.label(RichText::new(msg).color(if *ok { MUTED } else { ERROR }));
+        }
         ui.add_space(10.0);
         let names: Vec<String> = self.config.presets.iter().map(|p| p.name.clone()).collect();
         ui.horizontal_wrapped(|ui| {
@@ -1004,6 +1066,52 @@ impl SettingsApp {
         row(ui, "Name", "Shown on the slice", |ui| {
             ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(240.0));
         });
+        if let Some(before) = self.preset_rec.take() {
+            ui.ctx().request_repaint();
+            let down = keys_down();
+            match down.iter().find(|k| !before.contains(k)) {
+                Some(vk) => {
+                    if *vk != 0x1B {
+                        p.key = *vk;
+                    }
+                    self.feedback.set("pkey", Fb::Done, now);
+                }
+                None => {
+                    self.preset_rec =
+                        Some(before.into_iter().filter(|k| down.contains(k)).collect())
+                }
+            }
+        }
+        let recording = self.preset_rec.is_some();
+        let (mut record, mut clear) = (false, false);
+        row(
+            ui,
+            "Quick key",
+            "Press while dragging a file to run this preset with no wheel",
+            |ui| {
+                let text = if recording {
+                    "Press a key".to_string()
+                } else if p.key == 0 {
+                    "None".to_string()
+                } else {
+                    key_name(p.key)
+                };
+                record = self.feedback.button(ui, "pkey", Icon::Key, &text);
+                if p.key != 0 {
+                    clear = self.feedback.button(ui, "pkeyclear", Icon::Reset, "");
+                }
+            },
+        );
+        if record {
+            self.preset_rec = Some(keys_down());
+            self.feedback.set("pkey", Fb::Busy, now);
+        }
+        if clear {
+            p.key = 0;
+        }
+        if p.key != 0 && (p.key == self.config.convert_key || p.key == self.config.modify_key) {
+            ui.label(RichText::new("This key already opens a wheel.").color(ERROR));
+        }
         row(ui, "Wheel", "", |ui| {
             glide_bar(
                 ui,
@@ -1243,6 +1351,21 @@ impl SettingsApp {
             row(ui, label, "", |ui| {
                 switch(ui, value);
             });
+        }
+        row(
+            ui,
+            "ffmpeg arguments",
+            "Advanced. Added before the output file",
+            |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut p.args)
+                        .desired_width(300.0)
+                        .hint_text("-preset slow -metadata \"title=x\""),
+                );
+            },
+        );
+        if let Err(e) = config::split_args(&p.args) {
+            ui.label(RichText::new(e).color(ERROR));
         }
     }
 

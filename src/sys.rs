@@ -327,6 +327,47 @@ pub fn pick_folder() -> Option<std::path::PathBuf> {
     }
 }
 
+pub fn pick_json(save: bool) -> Option<std::path::PathBuf> {
+    use windows::{
+        core::{w, PCWSTR},
+        Win32::{
+            System::Com::{
+                CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_INPROC_SERVER,
+                COINIT_APARTMENTTHREADED,
+            },
+            UI::Shell::{
+                FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IFileSaveDialog,
+                SIGDN_FILESYSPATH,
+            },
+        },
+    };
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let dialog: IFileDialog = if save {
+            let d: IFileSaveDialog =
+                CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+            d.into()
+        } else {
+            let d: IFileOpenDialog =
+                CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+            d.into()
+        };
+        if save {
+            dialog.SetFileName(w!("presets.json")).ok()?;
+            dialog.SetDefaultExtension(PCWSTR(w!("json").0)).ok()?;
+        }
+        dialog.Show(None).ok()?;
+        let name = dialog
+            .GetResult()
+            .ok()?
+            .GetDisplayName(SIGDN_FILESYSPATH)
+            .ok()?;
+        let path = name.to_string().ok();
+        CoTaskMemFree(Some(name.0 as _));
+        path.map(Into::into)
+    }
+}
+
 pub fn winget_install(package: &str) -> bool {
     use std::os::windows::process::CommandExt;
     std::process::Command::new("winget")

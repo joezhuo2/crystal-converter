@@ -205,7 +205,12 @@ unsafe extern "system" fn host_proc(
 ) -> LRESULT {
     match msg {
         WM_HOTKEY_DOWN => {
-            with_app(|a| a.wheel.show(kind(wparam), &a.config));
+            with_app(
+                |a| match (wparam.0 as u32).checked_sub(hook::FIRST_PRESET) {
+                    Some(index) => a.wheel.show_preset(index as usize, &a.config),
+                    None => a.wheel.show(kind(wparam), &a.config),
+                },
+            );
         }
         WM_HOTKEY_UP => {
             with_app(|a| a.wheel.hotkey_up());

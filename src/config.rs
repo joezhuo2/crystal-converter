@@ -79,6 +79,8 @@ pub struct Preset {
     pub speed: f32,
     pub cut_start: f32,
     pub cut_len: f32,
+    pub key: u32,
+    pub args: String,
 }
 
 impl Default for Preset {
@@ -113,6 +115,8 @@ impl Default for Preset {
             speed: 1.0,
             cut_start: 0.0,
             cut_len: 0.0,
+            key: 0,
+            args: String::new(),
         }
     }
 }
@@ -138,6 +142,87 @@ impl Preset {
     pub fn matches(&self, category: Category) -> bool {
         self.category == Category::Any || self.category == category
     }
+}
+
+pub fn split_args(text: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut started = false;
+    let mut quote = None;
+    for c in text.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => cur.push(c),
+            (None, '"' | '\'') => {
+                quote = Some(c);
+                started = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if started {
+                    out.push(std::mem::take(&mut cur));
+                    started = false;
+                }
+            }
+            (None, c) => {
+                cur.push(c);
+                started = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return Err("Unclosed quote in ffmpeg arguments".into());
+    }
+    if started {
+        out.push(cur);
+    }
+    if out.iter().any(|a| a == "-i") {
+        return Err("ffmpeg arguments can't add inputs (-i)".into());
+    }
+    Ok(out)
+}
+
+pub fn export_presets(presets: &[Preset]) -> String {
+    serde_json::to_string_pretty(presets).unwrap_or_default()
+}
+
+pub fn import_presets(text: &str) -> Result<Vec<Preset>, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(text.trim()).map_err(|e| format!("Not valid preset JSON: {e}"))?;
+    let items = value.as_array().ok_or("Expected a JSON list of presets")?;
+    if items.is_empty() || items.len() > 50 {
+        return Err("Expected between 1 and 50 presets".into());
+    }
+    let known = match serde_json::to_value(Preset::default()) {
+        Ok(serde_json::Value::Object(m)) => m,
+        _ => return Err("Internal error".into()),
+    };
+    let mut out = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        let n = i + 1;
+        let obj = item
+            .as_object()
+            .ok_or_else(|| format!("Preset {n}: expected an object"))?;
+        if let Some(k) = obj.keys().find(|k| !known.contains_key(*k)) {
+            return Err(format!("Preset {n}: unknown field \"{k}\""));
+        }
+        let p: Preset =
+            serde_json::from_value(item.clone()).map_err(|e| format!("Preset {n}: {e}"))?;
+        if p.name.trim().is_empty() || p.name.chars().count() > 64 {
+            return Err(format!("Preset {n}: name must be 1 to 64 characters"));
+        }
+        if p.format.len() > 8 || !p.format.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(format!("Preset {n}: invalid format \"{}\"", p.format));
+        }
+        if p.key > 0xFE {
+            return Err(format!("Preset {n}: invalid key"));
+        }
+        if p.args.len() > 1000 {
+            return Err(format!("Preset {n}: ffmpeg arguments too long"));
+        }
+        split_args(&p.args).map_err(|e| format!("Preset {n}: {e}"))?;
+        out.push(p);
+    }
+    Ok(out)
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -246,5 +331,34 @@ mod tests {
         assert!(!c.sounds);
         assert_eq!(c.close_delay_ms, 1500);
         assert_eq!(c.presets[0].wheel, WheelKind::Modify);
+    }
+
+    #[test]
+    fn splits_args_with_quotes() {
+        assert_eq!(
+            split_args(r#"-vf "scale=1:2, fps=5" -metadata 'a b' ""  x"#).unwrap(),
+            vec!["-vf", "scale=1:2, fps=5", "-metadata", "a b", "", "x"]
+        );
+        assert!(split_args("-vf 'oops").is_err());
+        assert!(split_args("-i other.mp4").is_err());
+        assert!(split_args("   ").unwrap().is_empty());
+    }
+
+    #[test]
+    fn presets_round_trip_and_validate() {
+        let presets = vec![Preset {
+            key: 0x31,
+            args: "-preset slow".into(),
+            ..default_presets().remove(0)
+        }];
+        assert_eq!(import_presets(&export_presets(&presets)).unwrap(), presets);
+        assert!(import_presets(r#"[{"name":"x","exe":"cmd.exe"}]"#)
+            .unwrap_err()
+            .contains("unknown field"));
+        assert!(import_presets(r#"[{"name":"x","fps":"fast"}]"#).is_err());
+        assert!(import_presets(r#"[{"name":"x","format":"../x"}]"#).is_err());
+        assert!(import_presets(r#"[{"name":"x","args":"'"}]"#).is_err());
+        assert!(import_presets(r#"{"name":"x"}"#).is_err());
+        assert!(import_presets("[]").is_err());
     }
 }
