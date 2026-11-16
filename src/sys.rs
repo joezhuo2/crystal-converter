@@ -4,8 +4,11 @@ use windows::{
     core::{HSTRING, PCWSTR},
     Win32::{
         Media::Audio::{PlaySoundW, SND_ASYNC, SND_FLAGS, SND_MEMORY, SND_NODEFAULT},
-        System::Registry::{
-            RegDeleteKeyValueW, RegDeleteTreeW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ,
+        System::{
+            Registry::{
+                RegDeleteKeyValueW, RegDeleteTreeW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ,
+            },
+            Threading::{GetCurrentProcess, SetProcessWorkingSetSize},
         },
     },
 };
@@ -220,6 +223,12 @@ pub fn stop_sound() {
             let _ = PlaySoundW(PCWSTR::null(), None, SND_FLAGS(0));
         }
         *playing = Vec::new();
+    }
+}
+
+pub fn trim() {
+    unsafe {
+        let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
     }
 }
 

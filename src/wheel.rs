@@ -667,6 +667,7 @@ impl Wheel {
                     self.job = None;
                     hook::ESCAPE_ACTIVE.store(false, Ordering::Relaxed);
                     sys::stop_sound();
+                    sys::trim();
                     return;
                 }
                 1.0 - render::ease_out_cubic(t)

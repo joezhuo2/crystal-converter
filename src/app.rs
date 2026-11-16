@@ -212,6 +212,7 @@ unsafe extern "system" fn host_proc(
             if let Some(s) = status {
                 with_app(|a| a.tray.set_update(&s));
             }
+            sys::trim();
         }
         WM_COPYDATA => {
             let cds = unsafe { &*(lparam.0 as *const COPYDATASTRUCT) };
@@ -295,6 +296,7 @@ pub fn run(files: Vec<PathBuf>) {
                 last: Vec::new(),
             })
         });
+        sys::trim();
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
