@@ -25,9 +25,9 @@ use windows::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, POINTL, SIZE, WPARAM},
         Graphics::Gdi::{
             CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, GetMonitorInfoW,
-            MonitorFromPoint, ReleaseDC, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
-            BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
-            MONITORINFO, MONITOR_DEFAULTTONEAREST,
+            GetStockObject, MonitorFromPoint, ReleaseDC, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER,
+            BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLACK_BRUSH, BLENDFUNCTION, DIB_RGB_COLORS,
+            HBITMAP, HBRUSH, HDC, HGDIOBJ, MONITORINFO, MONITOR_DEFAULTTONEAREST,
         },
         System::{
             Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL},
@@ -44,11 +44,11 @@ use windows::{
             Shell::{DragQueryFileW, HDROP},
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, KillTimer,
-                RegisterClassExW, SetTimer, SetWindowPos, ShowWindow, UpdateLayeredWindow,
-                HWND_NOTOPMOST, MA_NOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-                SW_SHOWNOACTIVATE, ULW_ALPHA, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
-                WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-                WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+                RegisterClassExW, SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow,
+                UpdateLayeredWindow, HWND_NOTOPMOST, LWA_ALPHA, MA_NOACTIVATE, SWP_NOACTIVATE,
+                SWP_NOMOVE, SWP_NOSIZE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_LBUTTONUP,
+                WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
+                WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
             },
         },
     },
@@ -67,6 +67,82 @@ enum Phase {
     Selecting,
     Status,
     Closing,
+}
+
+struct Catcher(HWND);
+
+impl Drop for Catcher {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = RevokeDragDrop(self.0);
+            let _ = DestroyWindow(self.0);
+        }
+    }
+}
+
+impl Catcher {
+    fn create() -> Option<Self> {
+        unsafe {
+            let instance = GetModuleHandleW(None).ok()?.into();
+            static REGISTERED: std::sync::Once = std::sync::Once::new();
+            REGISTERED.call_once(|| {
+                let class = WNDCLASSEXW {
+                    cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                    lpfnWndProc: Some(catcher_proc),
+                    hInstance: instance,
+                    hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+                    lpszClassName: w!("CrystalConverterCatcher"),
+                    ..Default::default()
+                };
+                RegisterClassExW(&class);
+            });
+            let mut cursor = POINT::default();
+            let _ = GetCursorPos(&mut cursor);
+            let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            let _ = GetMonitorInfoW(monitor, &mut info);
+            let r = info.rcMonitor;
+            let hwnd = CreateWindowExW(
+                WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
+                w!("CrystalConverterCatcher"),
+                w!(""),
+                WS_POPUP,
+                r.left,
+                r.top,
+                r.right - r.left,
+                r.bottom - r.top,
+                None,
+                None,
+                Some(instance),
+                None,
+            )
+            .ok()?;
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 1, LWA_ALPHA);
+            let target: IDropTarget = DropTarget.into();
+            let _ = RegisterDragDrop(hwnd, &target);
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            Some(Self(hwnd))
+        }
+    }
+}
+
+unsafe extern "system" fn catcher_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_LBUTTONUP | WM_RBUTTONUP => {
+            app::with_wheel(Wheel::outside_click);
+            LRESULT(0)
+        }
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
 }
 
 struct Window {
@@ -104,6 +180,7 @@ struct Running {
 
 pub struct Wheel {
     host: isize,
+    catcher: Option<Catcher>,
     win: Option<Window>,
     config: Config,
     kind: WheelKind,
@@ -136,6 +213,7 @@ impl Wheel {
         let now = Instant::now();
         Self {
             host: host.0 as isize,
+            catcher: None,
             win: None,
             config: Config::default(),
             kind: WheelKind::Convert,
@@ -177,8 +255,10 @@ impl Wheel {
         self.kind = kind;
         self.config = config.clone();
         self.phase = Phase::Drag;
+        self.catcher = Catcher::create();
         self.win = Window::create();
         if self.win.is_none() {
+            self.catcher = None;
             self.phase = Phase::Hidden;
             return;
         }
@@ -226,6 +306,13 @@ impl Wheel {
         }
         self.phase = Phase::Closing;
         self.closing_at = Some(Instant::now());
+        self.catcher = None;
+    }
+
+    fn outside_click(&mut self) {
+        if matches!(self.phase, Phase::Drag | Phase::Selecting) {
+            self.close();
+        }
     }
 
     fn set_files(&mut self, files: Vec<PathBuf>) {
@@ -320,9 +407,13 @@ impl Wheel {
         let (x, y) = self.local(pt.0, pt.1);
         match self.hit(x, y) {
             Hit::Slice(i) => self.start(i),
-            _ => {
+            Hit::Center => {
                 self.phase = Phase::Selecting;
                 self.hover = Hit::None;
+            }
+            _ => {
+                self.close();
+                return false;
             }
         }
         true
@@ -409,6 +500,7 @@ impl Wheel {
             return;
         };
         let now = Instant::now();
+        self.catcher = None;
         self.phase = Phase::Status;
         self.status = Status::Preparing;
         self.status_at = now;
