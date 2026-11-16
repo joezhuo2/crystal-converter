@@ -6,6 +6,24 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-11-16
+
+### Added
+
+- Image: Crop slices (centre crop to 1:1, 4:3, 16:9 or 9:16) and a Grayscale
+  slice.
+- Image: a Favicon slice writes one `.ico` with 16, 32, 48, 64, 128 and 256 px
+  versions.
+- Image: a Lossless slice recompresses a PNG with identical pixels and keeps
+  the original if the result is not smaller.
+- Image: a "No GPS" slice removes only the GPS location from JPEG, PNG and WebP
+  files and keeps the rest of the metadata.
+- Audio: "Fade 2 s", "Speed 0.75x" and "Speed 1.5x" (pitch preserved) and
+  "First 30 s" slices.
+- Audio: an M4R slice makes an iPhone ringtone, capped at 40 seconds.
+- The preset editor has controls for fade, speed, cut start and length,
+  grayscale and GPS removal.
+
 ## [0.1.5] - 2026-11-16
 
 ### Added
@@ -123,7 +141,8 @@ follows [Semantic Versioning](https://semver.org/).
   spring switches, gliding tabs and button icon feedback).
 - Release zip with ffmpeg bundled, plus a standalone exe.
 
-[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.2...v0.1.3
