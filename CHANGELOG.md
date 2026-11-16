@@ -6,6 +6,20 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-16
+
+### Added
+
+- Text from images and PDFs: a TXT slice reads text with the OCR built into
+  Windows, and says so if no OCR language is installed.
+- A MERGE slice joins several dropped PDFs into one, in drop order. Encrypted
+  PDFs and PDFs that use cross-reference or object streams are refused with a
+  clear error; bookmarks and form fields are not carried over.
+- A ZIP slice packs dropped video, audio, document and PDF files into one
+  `.zip`. A new Archive type (ZIP, 7Z, RAR, TAR, TGZ, GZ) gets an EXTRACT slice
+  that unpacks into a new folder next to the archive.
+- Markdown files get HTML and PDF slices; the PDF is printed by Microsoft Edge.
+
 ## [0.1.3] - 2026-11-16
 
 ### Added
@@ -88,7 +102,8 @@ follows [Semantic Versioning](https://semver.org/).
   spring switches, gliding tabs and button icon feedback).
 - Release zip with ffmpeg bundled, plus a standalone exe.
 
-[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.0...v0.1.1
