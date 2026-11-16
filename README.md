@@ -97,7 +97,24 @@ number, so nothing is overwritten.
   not only its extension. A batch of mixed files uses the most common type
   and leaves the others alone.
 - **Batches and folders.** Drop several files or a folder; the circle counts
-  through them. Several images to PDF become one multi-page PDF.
+  through them. Several images to PDF become one multi-page PDF. Images and
+  audio convert several files at once (Settings > General > Parallel files).
+- **Queue.** Start another conversion while one is running (hold the key and
+  drag, or use the Explorer menu); it waits its turn and the circle shows
+  how many are waiting.
+- **Time left and speed.** While converting, the circle shows the time left
+  and ffmpeg's encode speed under the progress ring.
+- **Clear errors.** A failed job shows a short reason with **Copy error** and
+  **Open log** buttons. A batch reports `4 of 5 done, 1 failed`.
+- **Estimated size.** Hovering a slice such as 8 MB shows the size to expect
+  (`~7.2 MB`), or the new dimensions for a resize (`~960×540`).
+- **Notifications.** A Windows notification appears when a job that took 10
+  seconds or more finishes while the circle is closed or not always on top.
+- **Stays out of the way.** ffmpeg runs at below-normal priority, and the PC
+  stays awake until the job ends.
+- **Replace original** (off by default) moves the source file to the Recycle
+  Bin after a successful conversion. Nothing is deleted permanently, and a
+  failed job or an empty result never touches the source.
 - **Presets.** Add your own slices in Settings > Presets, for example
   "Discord 10 MB" (MP4 under 10 MB) or "Web" (WebP, 1920 px, quality 80).
   Each preset picks a wheel, a file type, an output format and any of the
@@ -176,8 +193,8 @@ be used because they change what a drag does (copy, move or shortcut).
 Settings has four tabs:
 
 - **General:** how long Done stays up, sounds, copy to clipboard when done,
-  save next to the original or to a folder, hardware encoding, launch at
-  login, always on top, the Explorer menu and update checks.
+  save next to the original or to a folder, hardware encoding, parallel
+  files, replace original, launch at login, always on top, the Explorer menu and update checks.
 - **Hotkeys:** the two keys.
 - **Presets:** add, reorder, delete or restore presets, and edit each one.
 - **About:** version, whether ffmpeg and LibreOffice were found (with
@@ -214,7 +231,7 @@ tab indicator, and buttons whose icon turns into a check when they work.
 | Path | What |
 |---|---|
 | `%APPDATA%\crystal-converter\config.json` | Settings and presets. An unreadable file is kept as `config.json.bak` and defaults are used. |
-| `%APPDATA%\crystal-converter\last-error.txt` | The full message from the last failed conversion. |
+| `%APPDATA%\crystal-converter\last-error.txt` | The full message from the last failed conversion (the **Open log** button). |
 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` → `Crystal Converter` | Only while Launch at login is on. |
 | `HKCU\Software\Classes\*\shell\CrystalConverter` | Only while the Explorer menu is on. |
 
