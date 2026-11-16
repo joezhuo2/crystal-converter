@@ -22,6 +22,7 @@ features = [
   "Data_Xml_Dom",
   "Foundation",
   "Graphics_Imaging",
+  "Media_Ocr",
   "Storage",
   "Storage_Streams",
   "UI_Notifications",
