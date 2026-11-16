@@ -291,6 +291,88 @@ fn main() {
         });
     }
     println!("{n} animation frames written to {}", out_dir.display());
+    write_icon(&out_dir.join("icon.ico"));
+    banner(&fonts).save_png(out_dir.join("banner.png")).unwrap();
+}
+
+fn write_icon(path: &std::path::Path) {
+    let sizes = [16u32, 24, 32, 48, 64, 128, 256];
+    let pngs: Vec<Vec<u8>> = sizes
+        .iter()
+        .map(|s| render::app_icon(*s).encode_png().unwrap())
+        .collect();
+    let mut ico = vec![0, 0, 1, 0, sizes.len() as u8, 0];
+    let mut offset = 6 + 16 * sizes.len();
+    for (s, png) in sizes.iter().zip(&pngs) {
+        let dim = if *s >= 256 { 0 } else { *s as u8 };
+        ico.extend_from_slice(&[dim, dim, 0, 0, 1, 0, 32, 0]);
+        ico.extend_from_slice(&(png.len() as u32).to_le_bytes());
+        ico.extend_from_slice(&(offset as u32).to_le_bytes());
+        offset += png.len();
+    }
+    for png in &pngs {
+        ico.extend_from_slice(png);
+    }
+    std::fs::write(path, ico).unwrap();
+}
+
+fn banner(fonts: &Fonts) -> Pixmap {
+    let (w, h) = (1280u32, 320u32);
+    let mut pm = Pixmap::new(w, h).unwrap();
+    pm.fill(Color::from_rgba8(0, 0, 0, 255));
+    if let Some(shader) = tiny_skia::RadialGradient::new(
+        Point::from_xy(250.0, 160.0),
+        0.0,
+        Point::from_xy(250.0, 160.0),
+        420.0,
+        vec![
+            GradientStop::new(0.0, Color::from_rgba8(168, 224, 255, 46)),
+            GradientStop::new(1.0, Color::from_rgba8(168, 224, 255, 0)),
+        ],
+        SpreadMode::Pad,
+        Transform::identity(),
+    ) {
+        let paint = Paint {
+            shader,
+            ..Default::default()
+        };
+        pm.fill_rect(
+            Rect::from_xywh(0.0, 0.0, w as f32, h as f32).unwrap(),
+            &paint,
+            Transform::identity(),
+            None,
+        );
+    }
+    let icon = render::app_icon(200);
+    pm.draw_pixmap(
+        150,
+        60,
+        icon.as_ref(),
+        &PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
+    render::draw_text(
+        &mut pm,
+        &fonts.bold,
+        72.0,
+        "Crystal Converter",
+        760.0,
+        138.0,
+        (245, 245, 245),
+        1.0,
+    );
+    render::draw_text(
+        &mut pm,
+        &fonts.regular,
+        28.0,
+        "Hold a key, drag a file, pick a format.",
+        760.0,
+        206.0,
+        (168, 224, 255),
+        1.0,
+    );
+    pm
 }
 
 fn base_clone<'a>(f: &Frame<'a>) -> Frame<'a> {
