@@ -121,6 +121,17 @@ number, so nothing is overwritten.
   changes below.
 - **Copy to clipboard when done** (off by default) puts the results on the
   clipboard as files, ready to paste into Explorer, chat apps or email.
+- **Open without dragging.** Select files in Explorer or on the desktop and
+  press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> to open
+  the wheel for them.
+- **Convert the clipboard.** <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>
+  opens the wheel for copied files or a copied image, so a screenshot becomes
+  PNG, JPG or WebP in one step.
+- **Drops from browsers.** Drag an image or a link from Chrome or Edge onto
+  the wheel. Only http and https links are downloaded (up to 100 MB), and only
+  types the app can convert are kept.
+- Results for clipboard images and browser drops are saved to your Pictures
+  folder, or to the output folder if you set one.
 - **Hardware encoding** uses NVIDIA NVENC, Intel Quick Sync or AMD AMF for
   MP4 when one works, and falls back to x264.
 - **Fast remux.** MP4, MOV, MKV and M4V swap containers without re-encoding
@@ -197,6 +208,10 @@ Settings has four tabs:
   save next to the original or to a folder, hardware encoding, parallel
   files, replace original, launch at login, always on top, the Explorer menu and update checks.
 - **Hotkeys:** the two keys.
+  save next to the original or to a folder, hardware encoding, launch at
+  login, always on top, the Explorer menu and update checks.
+- **Hotkeys:** the two wheel keys, plus the Explorer selection and Clipboard
+  hotkeys (the trash button turns one off).
 - **Presets:** add, reorder, delete or restore presets, and edit each one.
 - **About:** version, whether ffmpeg and LibreOffice were found (with
   **Install** buttons), update check, the Releases page and the config
@@ -270,6 +285,7 @@ cargo run --release --example render_frames -- target/frames
 | File | Does |
 |---|---|
 | `src/app.rs` | Single instance, hidden host window, message loop, tray actions |
+| `src/import.rs` | Explorer selection, clipboard and browser-drop import |
 | `src/hook.rs` | Low-level keyboard hook; only reacts while a mouse button is down |
 | `src/wheel.rs` | Layered window, OLE drop target, state machine, job thread |
 | `src/render.rs` | tiny-skia drawing for the wheel, status circle and icon |

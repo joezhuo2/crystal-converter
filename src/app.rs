@@ -1,6 +1,6 @@
 use crate::{
     config::{Config, WheelKind},
-    hook, sys,
+    hook, import, sys,
     tray::{Action, Tray, QUEUE},
     update,
     wheel::Wheel,
@@ -18,11 +18,14 @@ use windows::{
         },
         UI::{
             HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2},
+            Input::KeyboardAndMouse::{
+                RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT,
+            },
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowExW, FindWindowW,
                 GetMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW,
                 SetForegroundWindow, ShowWindow, TranslateMessage, HWND_MESSAGE, MSG, SW_RESTORE,
-                WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_COPYDATA, WNDCLASSEXW,
+                WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_COPYDATA, WM_HOTKEY, WNDCLASSEXW,
             },
         },
     },
@@ -35,6 +38,9 @@ pub const WM_TRAY: u32 = WM_APP + 4;
 pub const WM_JOB: u32 = WM_APP + 5;
 pub const WM_RELOAD: u32 = WM_APP + 6;
 pub const WM_UPDATE: u32 = WM_APP + 7;
+
+const HOTKEY_SELECTION: i32 = 1;
+const HOTKEY_CLIPBOARD: i32 = 2;
 
 pub const HOST_CLASS: PCWSTR = w!("CrystalConverterHost");
 pub const SETTINGS_TITLE: &str = "Crystal Converter Settings";
@@ -158,8 +164,28 @@ impl App {
     fn reload(&mut self) {
         self.config = Config::load();
         hook::set_keys(&self.config);
+        register_hotkeys(HWND(self.host as _), &self.config);
         sys::apply(&self.config);
         self.tray.sync(&self.config);
+    }
+}
+
+fn register_hotkeys(host: HWND, config: &Config) {
+    for (id, key) in [
+        (HOTKEY_SELECTION, config.selection_key),
+        (HOTKEY_CLIPBOARD, config.clipboard_key),
+    ] {
+        unsafe {
+            let _ = UnregisterHotKey(Some(host), id);
+            if key != 0 {
+                let _ = RegisterHotKey(
+                    Some(host),
+                    id,
+                    MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
+                    key,
+                );
+            }
+        }
     }
 }
 
@@ -203,6 +229,16 @@ unsafe extern "system" fn host_proc(
                     }
                 }
             });
+        }
+        WM_HOTKEY => {
+            let files = if wparam.0 as i32 == HOTKEY_SELECTION {
+                import::explorer_selection()
+            } else {
+                import::clipboard()
+            };
+            if !files.is_empty() {
+                with_app(|a| a.wheel.open_files(files, &a.config));
+            }
         }
         WM_RELOAD => {
             with_app(App::reload);
@@ -273,6 +309,8 @@ pub fn run(files: Vec<PathBuf>) {
         let first_run = !Config::exists();
         let config = Config::load();
         hook::install(host, &config);
+        register_hotkeys(host, &config);
+        import::clear_staging();
         sys::apply(&config);
         let tray = Tray::new(move || post(host_id, WM_TRAY), &config);
         if config.check_updates {
