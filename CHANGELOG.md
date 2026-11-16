@@ -6,6 +6,21 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-16
+
+### Added
+
+- Select files in Explorer or on the desktop and press
+  <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> to open the wheel
+  for them, without dragging.
+- Press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> to open the
+  wheel for the files or image on the clipboard, so a screenshot becomes PNG,
+  JPG or WebP in one step.
+- Both keys can be changed or turned off in Settings > Hotkeys.
+- Drag images or links from Chrome or Edge onto the wheel. Only http and https
+  links are downloaded (up to 100 MB), and results go to Pictures or your
+  output folder.
+
 ## [0.1.2] - 2026-11-16
 
 ### Added
@@ -73,7 +88,8 @@ follows [Semantic Versioning](https://semver.org/).
   spring switches, gliding tabs and button icon feedback).
 - Release zip with ffmpeg bundled, plus a standalone exe.
 
-[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/joezhuo2/crystal-converter/releases/tag/v0.1.0
