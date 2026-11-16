@@ -22,7 +22,7 @@ const RAISED: Color32 = Color32::from_rgb(30, 30, 30);
 const HOVER: Color32 = Color32::from_rgb(40, 40, 40);
 const TEXT: Color32 = Color32::from_rgb(245, 245, 245);
 const MUTED: Color32 = Color32::from_rgb(140, 140, 140);
-const SPRING: (f32, f32, f32, f32) = (0.34, 1.56, 0.64, 1.0);
+const SPRING: (f32, f32, f32, f32) = (0.34, 1.25, 0.64, 1.0);
 const EASE: (f32, f32, f32, f32) = (0.2, 0.8, 0.2, 1.0);
 const RESET_AFTER: f64 = 1.5;
 
@@ -167,9 +167,13 @@ fn switch(ui: &mut Ui, on: &mut bool) -> Response {
         resp.mark_changed();
     }
     let id = resp.id;
-    let p = tween(ui, id.with("pos"), if *on { 1.0 } else { 0.0 }, 0.4, &|t| {
-        cubic_bezier(SPRING, t)
-    });
+    let p = tween(
+        ui,
+        id.with("pos"),
+        if *on { 1.0 } else { 0.0 },
+        0.32,
+        &|t| cubic_bezier(SPRING, t),
+    );
     let pressed = resp.is_pointer_button_down_on();
     let stretch = tween(
         ui,
@@ -189,7 +193,7 @@ fn switch(ui: &mut Ui, on: &mut bool) -> Response {
             StrokeKind::Inside,
         );
     }
-    let knob_w = 22.0 + 6.0 * stretch;
+    let knob_w = 22.0 + 4.0 * stretch;
     let x = rect.left() + 3.0 + p * (42.0 - knob_w);
     let knob = Rect::from_min_size(pos2(x, rect.top() + 3.0), vec2(knob_w, 22.0));
     painter.rect_filled(
@@ -218,7 +222,7 @@ fn glide_bar<T: PartialEq + Copy>(
         .data(|d| d.get_temp::<usize>(id.with("prev")))
         .unwrap_or(selected);
     let forward = selected >= prev;
-    let (dl, dr) = if forward { (0.4, 0.22) } else { (0.22, 0.4) };
+    let (dl, dr) = if forward { (0.32, 0.2) } else { (0.2, 0.32) };
     let target_l = rect.left() + 3.0 + w * selected as f32;
     let left = tween(ui, id.with("l"), target_l, dl, &|t| cubic_bezier(SPRING, t));
     let right = tween(ui, id.with("r"), target_l + w, dr, &|t| {
@@ -353,7 +357,7 @@ fn smooth_range(
     if let Some((from, to, start)) = st.glide {
         let elapsed = (now - start) as f32;
         let v = snap(
-            from + (to - from) * ease_out_quart(elapsed / 0.3),
+            from + (to - from) * ease_out_quart(elapsed / 0.25),
             min,
             step,
         )
@@ -362,7 +366,7 @@ fn smooth_range(
             *value = v;
             resp.mark_changed();
         }
-        if elapsed >= 0.3 {
+        if elapsed >= 0.25 {
             st.glide = None;
         } else {
             ui.ctx().request_repaint();
@@ -396,15 +400,15 @@ fn smooth_range(
     );
     painter.circle_filled(
         pos2(x, track.center().y + 1.0),
-        8.0 + grow,
+        8.0 + 0.6 * grow,
         Color32::from_black_alpha(60),
     );
-    painter.circle_filled(pos2(x, track.center().y), 7.5 + grow, TEXT);
+    painter.circle_filled(pos2(x, track.center().y), 7.5 + 0.6 * grow, TEXT);
     resp
 }
 
 fn animated_number(ui: &mut Ui, id: Id, value: f32, fmt: &dyn Fn(f32) -> String) {
-    let shown = tween(ui, id, value, 0.6, &ease_out_cubic);
+    let shown = tween(ui, id, value, 0.45, &ease_out_cubic);
     ui.add_sized(
         [78.0, 20.0],
         egui::Label::new(RichText::new(fmt(shown)).color(TEXT).monospace()),
@@ -584,7 +588,7 @@ impl Feedback {
             &ease_out_cubic,
         );
         let press = if resp.is_pointer_button_down_on() {
-            0.97
+            0.985
         } else {
             1.0
         };
@@ -594,9 +598,9 @@ impl Feedback {
         let swap = cubic_bezier(EASE, ((now - since) as f32 / 0.3).clamp(0.0, 1.0));
         let mut alpha = swap;
         if fb == Fb::Busy {
-            alpha *= 0.55 + 0.45 * ((now * std::f64::consts::TAU / 0.8).cos() as f32 * 0.5 + 0.5);
+            alpha *= 0.7 + 0.3 * ((now * std::f64::consts::TAU / 0.8).cos() as f32 * 0.5 + 0.5);
         }
-        let dy = 6.0 * (1.0 - swap);
+        let dy = 4.0 * (1.0 - swap);
         let c = color.gamma_multiply(alpha);
         let icon_x = if text.is_empty() {
             r.center().x
@@ -1324,7 +1328,7 @@ impl eframe::App for SettingsApp {
                     self.scroll_target = (self.scroll_target - wheel).clamp(0.0, self.scroll_max);
                 }
                 let dt = ui.input(|i| i.stable_dt).min(0.1);
-                let ease = 1.0 - (1.0 - 0.08f32).powf(dt * 60.0);
+                let ease = 1.0 - (1.0 - 0.12f32).powf(dt * 60.0);
                 self.scroll += (self.scroll_target - self.scroll) * ease;
                 if (self.scroll_target - self.scroll).abs() < 0.5 {
                     self.scroll = self.scroll_target;
@@ -1404,7 +1408,7 @@ mod tests {
 
     #[test]
     fn spring_bezier_overshoots_then_settles() {
-        assert!(cubic_bezier(SPRING, 0.5) > 1.0);
+        assert!(cubic_bezier(SPRING, 0.8) > 1.0);
         assert!((cubic_bezier(SPRING, 1.0) - 1.0).abs() < 1e-6);
         assert!(cubic_bezier(EASE, 0.5) > 0.5);
     }
