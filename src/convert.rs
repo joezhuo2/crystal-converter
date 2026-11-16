@@ -64,6 +64,7 @@ pub struct Info {
 
 pub fn run(job: Job, cancel: &AtomicBool, emit: &mut dyn FnMut(Event)) {
     let grouped = matches!(job.preset.format.as_str(), "merge" | "zip")
+        || matches!(job.preset.op.as_str(), "join" | "slideshow")
         || job.preset.format == "pdf"
             && job.files.iter().all(|f| detect(f) == Some(Category::Image));
     let groups: Vec<Vec<PathBuf>> = if grouped {
@@ -185,7 +186,7 @@ fn convert(
     } else {
         p.format.clone()
     };
-    let suffix = (fmt == in_ext).then(|| slug(&p.name));
+    let suffix = (fmt == in_ext || !p.op.is_empty()).then(|| slug(&p.name));
     let dir = match &job.out_dir {
         Some(d) => d.clone(),
         None => input.parent().map(Path::to_path_buf).unwrap_or_default(),
@@ -211,6 +212,18 @@ fn convert(
         Category::Document if in_ext == "md" => markdown(input, &fmt, &out, cancel),
         Category::Document => office(input, &fmt, &out),
         Category::Image if fmt == "pdf" => images_to_pdf(group, &out, p, cancel, progress),
+        _ if p.op == "join" => join(
+            group,
+            &out,
+            &fmt,
+            category,
+            p,
+            job.hardware,
+            cancel,
+            progress,
+        ),
+        Category::Image if p.op == "slideshow" => slideshow(group, &out, cancel, progress),
+        Category::Video if fmt == "srt" => subtitles(input, &out, cancel, progress),
         _ => ffmpeg_convert(
             input,
             &out,
@@ -306,7 +319,11 @@ fn ffmpeg_convert(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(f32),
 ) -> Result<(), String> {
-    let info = probe(input)?;
+    if p.trim_end > 0.0 && p.trim_end <= p.trim_start {
+        return Err("trim end must be after trim start".into());
+    }
+    let mut info = probe(input)?;
+    info.duration = trim_span(p, info.duration);
     let containers = ["mp4", "m4v", "mov", "mkv"];
     if !has_ops(p) && containers.contains(&fmt) && containers.contains(&ext_of(input).as_str()) {
         let mut args = base_args(input);
@@ -326,8 +343,22 @@ fn ffmpeg_convert(
     run_ffmpeg(&args, info.duration, cancel, progress)
 }
 
+fn trim_span(p: &Preset, duration: Option<f64>) -> Option<f64> {
+    duration.map(|d| {
+        let end = if p.trim_end > 0.0 {
+            d.min(f64::from(p.trim_end))
+        } else {
+            d
+        };
+        (end - f64::from(p.trim_start)).max(0.1)
+    })
+}
+
 fn has_ops(p: &Preset) -> bool {
-    p.max_size_mb > 0.0
+    !p.op.is_empty()
+        || p.trim_start > 0.0
+        || p.trim_end > 0.0
+        || p.max_size_mb > 0.0
         || p.max_dim > 0
         || (p.scale_pct > 0 && p.scale_pct < 100)
         || p.quality > 0
@@ -410,6 +441,12 @@ pub fn build_args(
     encoder: Option<&str>,
 ) -> Vec<String> {
     let mut a = base_args(input);
+    if p.trim_start > 0.0 {
+        a.extend(["-ss".into(), p.trim_start.to_string()]);
+    }
+    if p.trim_end > 0.0 {
+        a.extend(["-to".into(), p.trim_end.to_string()]);
+    }
     let mut vf = image_filters(p);
     let mut af: Vec<String> = Vec::new();
     let audio_out = matches!(fmt, "mp3" | "wav" | "flac" | "opus" | "ogg" | "m4a" | "aac");
@@ -428,7 +465,29 @@ pub fn build_args(
     if category == Category::Image && matches!(fmt, "jpg" | "bmp") {
         vf.push(WHITE_BG.into());
     }
+    match p.op.as_str() {
+        "speed2" => {
+            vf.push("setpts=PTS/2".into());
+            af.push("atempo=2".into());
+        }
+        "hdr" => vf.push(hdr_chain(ffmpeg_filters()).into()),
+        "thumb" => {
+            if let Some(d) = info.duration {
+                a.extend(["-ss".into(), format!("{:.2}", d * 0.1)]);
+            }
+        }
+        "sheet" => vf.push(sheet_filter(info.duration)),
+        _ => {}
+    }
     match fmt {
+        "webp" if category == Category::Video => {
+            if p.fps == 0 {
+                vf.push("fps=15".into());
+            }
+            if p.max_dim == 0 && p.scale_pct == 0 {
+                vf.push("scale='min(iw,480)':-2".into());
+            }
+        }
         "ico" => vf.push(
             "scale=w='min(iw,256)':h='min(ih,256)':force_original_aspect_ratio=decrease".into(),
         ),
@@ -619,8 +678,8 @@ pub fn build_args(
             } else {
                 85
             };
-            if anim_gif_in {
-                push(&mut a, &["-c:v", "libwebp_anim", "-loop", "0"]);
+            if anim_gif_in || category == Category::Video {
+                push(&mut a, &["-c:v", "libwebp_anim", "-loop", "0", "-an"]);
             } else {
                 push(&mut a, &["-c:v", "libwebp", "-frames:v", "1"]);
             }
@@ -645,6 +704,35 @@ pub fn build_args(
     }
     a.push(out.to_string_lossy().into());
     a
+}
+
+pub fn hdr_chain(filters: &str) -> &'static str {
+    if filters.contains(" zscale ") {
+        "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
+    } else if filters.contains(" tonemapx ") {
+        "tonemapx=tonemap=hable:desat=0:p=bt709:t=bt709:m=bt709:r=tv:format=yuv420p"
+    } else {
+        "colorspace=all=bt709:iall=bt2020:fast=1,format=yuv420p"
+    }
+}
+
+fn ffmpeg_filters() -> &'static str {
+    static F: OnceLock<String> = OnceLock::new();
+    F.get_or_init(|| {
+        command(ffmpeg())
+            .args(["-hide_banner", "-filters"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    })
+}
+
+pub fn sheet_filter(duration: Option<f64>) -> String {
+    let fps = match duration.filter(|d| *d > 0.0) {
+        Some(d) => format!("{:.5}", 12.0 / d),
+        None => "0.1".into(),
+    };
+    format!("fps={fps},scale=320:-2,tile=4x3:padding=4")
 }
 
 fn path_dirs() -> Vec<PathBuf> {
@@ -692,18 +780,22 @@ pub(crate) fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     c
 }
 
-pub fn probe(input: &Path) -> Result<Info, String> {
-    probe_meta(input).map(|(info, _)| info)
-}
-
-pub fn probe_meta(input: &Path) -> Result<(Info, Option<(u32, u32)>), String> {
+fn probe_text(input: &Path) -> Result<String, String> {
     let out = command(ffmpeg())
         .arg("-hide_banner")
         .arg("-i")
         .arg(input)
         .output()
         .map_err(spawn_err)?;
-    let text = String::from_utf8_lossy(&out.stderr);
+    Ok(String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+pub fn probe(input: &Path) -> Result<Info, String> {
+    probe_meta(input).map(|(info, _)| info)
+}
+
+pub fn probe_meta(input: &Path) -> Result<(Info, Option<(u32, u32)>), String> {
+    let text = probe_text(input)?;
     Ok((parse_probe(&text), parse_dims(&text)))
 }
 
@@ -761,6 +853,199 @@ pub fn estimate(p: &Preset, size: u64, info: &Info, dims: Option<(u32, u32)>) ->
     }
     let (nw, nh) = (nw.round() as u32, nh.round() as u32);
     (nw != w || nh != h).then(|| format!("~{nw}×{nh}"))
+}
+
+fn text_subtitle_index(text: &str) -> Option<usize> {
+    text.lines()
+        .filter(|l| l.contains("Stream #"))
+        .filter_map(|l| l.split_once(": Subtitle: ").map(|(_, r)| r))
+        .position(|r| {
+            let codec = r
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_end_matches(',');
+            matches!(
+                codec,
+                "subrip" | "srt" | "ass" | "ssa" | "mov_text" | "webvtt" | "text" | "subviewer"
+            )
+        })
+}
+
+fn stream_sig(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|l| l.contains("Stream #"))
+        .filter_map(|l| {
+            let (kind, rest) = ["Video", "Audio"]
+                .into_iter()
+                .find_map(|k| l.split_once(&format!(": {k}: ")).map(|(_, r)| (k, r)))?;
+            let words: Vec<&str> = rest
+                .split_whitespace()
+                .map(|w| w.trim_end_matches(','))
+                .collect();
+            let near = |m: &str, d: isize| {
+                words
+                    .iter()
+                    .position(|w| *w == m)
+                    .and_then(|i| words.get(i.wrapping_add_signed(d)))
+                    .copied()
+                    .unwrap_or("")
+            };
+            let size = words
+                .iter()
+                .find(|w| {
+                    w.split_once('x')
+                        .is_some_and(|(a, b)| a.parse::<u32>().is_ok() && b.parse::<u32>().is_ok())
+                })
+                .copied()
+                .unwrap_or("");
+            Some(format!(
+                "{kind} {} {size} {} {} {}",
+                words.first().copied().unwrap_or(""),
+                near("fps", -1),
+                near("Hz", -1),
+                near("Hz", 1)
+            ))
+        })
+        .collect()
+}
+
+fn concat_list(files: &[PathBuf], seconds: Option<u32>) -> String {
+    let entry = |f: &PathBuf| {
+        format!(
+            "file '{}'\n",
+            f.to_string_lossy()
+                .replace('\\', "/")
+                .replace('\'', "'\\''")
+        )
+    };
+    let mut s = String::new();
+    for f in files {
+        s.push_str(&entry(f));
+        if let Some(d) = seconds {
+            s.push_str(&format!("duration {d}\n"));
+        }
+    }
+    if seconds.is_some() {
+        if let Some(last) = files.last() {
+            s.push_str(&entry(last));
+        }
+    }
+    s
+}
+
+fn concat_input(args: &mut Vec<String>) {
+    if let Some(i) = args.iter().position(|a| a == "-i") {
+        args.splice(i..i, ["-f", "concat", "-safe", "0"].map(String::from));
+    }
+}
+
+fn write_list(text: &str) -> Result<PathBuf, String> {
+    let path = env::temp_dir().join(format!(
+        "crystal-converter-{}-{}.txt",
+        std::process::id(),
+        next_id()
+    ));
+    fs::write(&path, text).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+const SLIDE_SECONDS: u32 = 3;
+
+fn slideshow_args(list: &Path, out: &Path) -> Vec<String> {
+    let mut a = base_args(list);
+    concat_input(&mut a);
+    push(
+        &mut a,
+        &[
+            "-vf",
+            "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p",
+            "-r",
+            "30",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+        ],
+    );
+    a.push(out.to_string_lossy().into());
+    a
+}
+
+fn slideshow(
+    group: &[PathBuf],
+    out: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<(), String> {
+    let list = write_list(&concat_list(group, Some(SLIDE_SECONDS)))?;
+    let total = f64::from(SLIDE_SECONDS) * group.len() as f64;
+    let result = run_ffmpeg(&slideshow_args(&list, out), Some(total), cancel, progress);
+    let _ = fs::remove_file(list);
+    result
+}
+
+fn subtitles(
+    input: &Path,
+    out: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<(), String> {
+    let index =
+        text_subtitle_index(&probe_text(input)?).ok_or("no text subtitle stream in this file")?;
+    let mut a = base_args(input);
+    a.extend(["-map".into(), format!("0:s:{index}")]);
+    push(&mut a, &["-c:s", "srt"]);
+    a.push(out.to_string_lossy().into());
+    run_ffmpeg(&a, None, cancel, progress)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn join(
+    group: &[PathBuf],
+    out: &Path,
+    fmt: &str,
+    category: Category,
+    p: &Preset,
+    hardware: bool,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<(), String> {
+    if group.len() < 2 {
+        return Err("joining needs at least two files".into());
+    }
+    let mut sigs = Vec::new();
+    let mut total = Some(0.0);
+    let mut first = Info::default();
+    for (i, f) in group.iter().enumerate() {
+        let text = probe_text(f).map_err(|e| format!("{}: {e}", file_name(f)))?;
+        let info = parse_probe(&text);
+        sigs.push(stream_sig(&text));
+        total = total.zip(info.duration).map(|(a, b)| a + b);
+        if i == 0 {
+            first = info;
+        }
+    }
+    let list = write_list(&concat_list(group, None))?;
+    let mut args = if sigs.iter().all(|s| *s == sigs[0]) {
+        let mut a = base_args(&list);
+        push(&mut a, &["-c", "copy"]);
+        a.push(out.to_string_lossy().into());
+        a
+    } else {
+        let info = Info {
+            duration: total,
+            ..first
+        };
+        let encoder = if hardware { hw_encoder() } else { None };
+        build_args(&list, out, fmt, category, p, &info, encoder)
+    };
+    concat_input(&mut args);
+    let result = run_ffmpeg(&args, total, cancel, progress);
+    let _ = fs::remove_file(list);
+    result
 }
 
 fn parse_probe(text: &str) -> Info {
@@ -1366,6 +1651,104 @@ mod tests {
         assert!(a.contains(&"-maxrate".to_string()) && a.contains(&"h264_nvenc".to_string()));
     }
 
+    fn args_for(p: &Preset, fmt: &str, category: Category, duration: Option<f64>) -> Vec<String> {
+        let info = Info {
+            duration,
+            has_audio: true,
+            has_video: true,
+        };
+        build_args(
+            Path::new("in.mp4"),
+            Path::new("out"),
+            fmt,
+            category,
+            p,
+            &info,
+            None,
+        )
+    }
+
+    fn has(a: &[String], pair: [&str; 2]) -> bool {
+        a.windows(2).any(|w| w == pair)
+    }
+
+    #[test]
+    fn builds_video_operation_args() {
+        let trim = Preset {
+            trim_start: 5.0,
+            trim_end: 35.0,
+            ..Preset::default()
+        };
+        let a = args_for(&trim, "mp4", Category::Video, Some(100.0));
+        assert!(has(&a, ["-ss", "5"]) && has(&a, ["-to", "35"]));
+        assert_eq!(trim_span(&trim, Some(100.0)), Some(30.0));
+        assert_eq!(trim_span(&trim, Some(20.0)), Some(15.0));
+        assert_eq!(trim_span(&Preset::default(), Some(20.0)), Some(20.0));
+        assert!(has_ops(&trim));
+
+        let speed = Preset {
+            op: "speed2".into(),
+            ..Preset::default()
+        };
+        let a = args_for(&speed, "mp4", Category::Video, Some(10.0));
+        assert!(has(&a, ["-af", "atempo=2"]));
+        assert!(a.iter().any(|x| x.starts_with("setpts=PTS/2")));
+
+        let thumb = Preset {
+            op: "thumb".into(),
+            ..Preset::default()
+        };
+        let a = args_for(&thumb, "jpg", Category::Video, Some(100.0));
+        assert!(has(&a, ["-ss", "10.00"]) && has(&a, ["-frames:v", "1"]));
+
+        let sheet = Preset {
+            op: "sheet".into(),
+            ..Preset::default()
+        };
+        let a = args_for(&sheet, "jpg", Category::Video, Some(60.0));
+        assert!(a
+            .iter()
+            .any(|x| x.contains("fps=0.20000,scale=320:-2,tile=4x3")));
+
+        let a = args_for(&Preset::default(), "webp", Category::Video, Some(5.0));
+        assert!(has(&a, ["-c:v", "libwebp_anim"]) && a.contains(&"-an".to_string()));
+        assert!(a.iter().any(|x| x.contains("fps=15")));
+    }
+
+    #[test]
+    fn picks_hdr_chain_by_available_filters() {
+        assert!(hdr_chain(" TSC zscale  V->V").starts_with("zscale="));
+        assert!(hdr_chain(" ... tonemapx  V->V").starts_with("tonemapx="));
+        assert!(hdr_chain("").starts_with("colorspace="));
+    }
+
+    #[test]
+    fn finds_text_subtitles_and_stream_signatures() {
+        let text = "  Stream #0:0: Video: h264 (High), yuv420p(tv, bt709), 1920x1080 [SAR 1:1 DAR 16:9], 30 fps, 30 tbr\n  Stream #0:1(eng): Audio: aac (LC), 48000 Hz, stereo, fltp\n  Stream #0:2: Subtitle: hdmv_pgs_subtitle\n  Stream #0:3: Subtitle: subrip\n";
+        assert_eq!(text_subtitle_index(text), Some(1));
+        assert_eq!(text_subtitle_index("Stream #0:0: Video: h264"), None);
+        assert_eq!(
+            stream_sig(text),
+            vec!["Video h264 1920x1080 30  ", "Audio aac   48000 stereo"]
+        );
+    }
+
+    #[test]
+    fn builds_concat_inputs() {
+        let files = [PathBuf::from(r"C:\a b\it's.png"), PathBuf::from("b.png")];
+        assert_eq!(
+            concat_list(&files, None),
+            "file 'C:/a b/it'\\''s.png'\nfile 'b.png'\n"
+        );
+        assert_eq!(
+            concat_list(&files, Some(3)),
+            "file 'C:/a b/it'\\''s.png'\nduration 3\nfile 'b.png'\nduration 3\nfile 'b.png'\n"
+        );
+        let a = slideshow_args(Path::new("l.txt"), Path::new("o.mp4"));
+        let i = a.iter().position(|x| x == "-i").unwrap();
+        assert_eq!(a[i - 4..i], ["-f", "concat", "-safe", "0"]);
+    }
+
     #[test]
     #[ignore = "needs ffmpeg with libaom, libwebp and libvpx"]
     fn real_ffmpeg_round_trip() {
@@ -1393,6 +1776,27 @@ mod tests {
             .status()
             .unwrap();
         assert!(made.success());
+        assert!(command(ffmpeg())
+            .args([
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=s=320x240:d=1"
+            ])
+            .args([
+                "-vf",
+                "setparams=colorspace=bt2020nc:color_primaries=bt2020:color_trc=smpte2084,format=yuv420p10le",
+                "-c:v",
+                "libx265",
+                "-x265-params",
+                "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:log-level=error",
+            ])
+            .arg(dir.join("hdr.mp4"))
+            .status()
+            .unwrap()
+            .success());
         let png = dir.join("pic.png");
         assert!(command(ffmpeg())
             .args([
@@ -1410,6 +1814,45 @@ mod tests {
             .unwrap()
             .success());
         let cases: Vec<(PathBuf, Preset)> = vec![
+            (
+                src.clone(),
+                Preset {
+                    trim_start: 0.5,
+                    trim_end: 1.5,
+                    ..Preset::named("Trim", Category::Video)
+                },
+            ),
+            (src.clone(), Preset::convert_to("webp")),
+            (
+                src.clone(),
+                Preset {
+                    op: "speed2".into(),
+                    ..Preset::named("2x speed", Category::Video)
+                },
+            ),
+            (
+                dir.join("hdr.mp4"),
+                Preset {
+                    op: "hdr".into(),
+                    ..Preset::named("HDR to SDR", Category::Video)
+                },
+            ),
+            (
+                src.clone(),
+                Preset {
+                    op: "thumb".into(),
+                    format: "jpg".into(),
+                    ..Preset::named("Thumbnail", Category::Video)
+                },
+            ),
+            (
+                src.clone(),
+                Preset {
+                    op: "sheet".into(),
+                    format: "jpg".into(),
+                    ..Preset::named("Contact sheet", Category::Video)
+                },
+            ),
             (src.clone(), Preset::convert_to("webm")),
             (src.clone(), Preset::convert_to("gif")),
             (src.clone(), Preset::convert_to("mp3")),
@@ -1461,6 +1904,99 @@ mod tests {
             let out = outcome.unwrap().unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(fs::metadata(&out).unwrap().len() > 0, "{name}");
         }
+        let srt = dir.join("subs.srt");
+        fs::write(&srt, "1\n00:00:00,000 --> 00:00:01,000\nhello\n").unwrap();
+        let withsubs = dir.join("withsubs.mp4");
+        assert!(command(ffmpeg())
+            .args(["-loglevel", "error", "-i"])
+            .arg(&src)
+            .arg("-i")
+            .arg(&srt)
+            .args(["-c", "copy", "-c:s", "mov_text"])
+            .arg(&withsubs)
+            .status()
+            .unwrap()
+            .success());
+        let png2 = dir.join("pic2.png");
+        fs::copy(&png, &png2).unwrap();
+        let src2 = dir.join("clip2.mp4");
+        fs::copy(&src, &src2).unwrap();
+        let odd = dir.join("odd.mp4");
+        assert!(command(ffmpeg())
+            .args([
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=s=160x120:d=1"
+            ])
+            .args(["-pix_fmt", "yuv420p"])
+            .arg(&odd)
+            .status()
+            .unwrap()
+            .success());
+        let wav1 = dir.join("a.wav");
+        let wav2 = dir.join("b.wav");
+        for w in [&wav1, &wav2] {
+            assert!(command(ffmpeg())
+                .args(["-loglevel", "error", "-f", "lavfi", "-i", "sine=d=1"])
+                .arg(w)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let join = |name: &str, files: Vec<PathBuf>, preset: Preset| {
+            let mut outcome = None;
+            run(
+                Job {
+                    files,
+                    preset,
+                    out_dir: None,
+                    hardware: false,
+                    parallel: 1,
+                    replace_original: false,
+                },
+                &cancel,
+                &mut |e| {
+                    if let Event::Done { outputs, .. } = &e {
+                        outcome = Some(Ok(outputs[0].clone()));
+                    } else if let Event::Failed(msg) = &e {
+                        outcome = Some(Err(msg.clone()));
+                    }
+                },
+            );
+            let out = outcome.unwrap().unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(fs::metadata(&out).unwrap().len() > 0, "{name}");
+        };
+        let op = |name: &str, op: &str, category| Preset {
+            op: op.into(),
+            ..Preset::named(name, category)
+        };
+        join("srt", vec![withsubs], Preset::convert_to("srt"));
+        join(
+            "join copy",
+            vec![src.clone(), src2.clone()],
+            op("Join", "join", Category::Video),
+        );
+        join(
+            "join reencode",
+            vec![src.clone(), odd],
+            op("Join", "join", Category::Video),
+        );
+        join(
+            "join audio",
+            vec![wav1, wav2],
+            op("Join", "join", Category::Audio),
+        );
+        join(
+            "slideshow",
+            vec![png, png2],
+            Preset {
+                format: "mp4".into(),
+                ..op("Slideshow", "slideshow", Category::Image)
+            },
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 }

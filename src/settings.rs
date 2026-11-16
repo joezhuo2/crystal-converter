@@ -1162,6 +1162,19 @@ impl SettingsApp {
             );
         });
         for (label, value) in [
+            ("Trim start", &mut p.trim_start),
+            ("Trim end", &mut p.trim_end),
+        ] {
+            row(ui, label, "Seconds, 0 leaves it unchanged", |ui| {
+                ui.add(
+                    egui::DragValue::new(value)
+                        .speed(0.5)
+                        .range(0.0..=86400.0)
+                        .suffix(" s"),
+                );
+            });
+        }
+        for (label, value) in [
             ("Normalize loudness", &mut p.normalize),
             ("Trim silence", &mut p.trim_silence),
             ("Mono", &mut p.mono),
