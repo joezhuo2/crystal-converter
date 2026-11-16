@@ -6,6 +6,21 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-11-16
+
+### Added
+
+- The app can install updates itself. Choose "Install update" in the tray menu
+  or in Settings > About: it downloads the new exe from the release, checks its
+  size and SHA-256, swaps it in and restarts.
+- If an update fails, or the app's folder is not writable, the old exe keeps
+  working, a message gives the reason and the release page opens.
+
+### Changed
+
+- The tray item that read "Update found" now reads "Install update". Nothing
+  installs until you click it.
+
 ## [0.1.7] - 2026-11-16
 
 ### Added
@@ -152,7 +167,8 @@ follows [Semantic Versioning](https://semver.org/).
   spring switches, gliding tabs and button icon feedback).
 - Release zip with ffmpeg bundled, plus a standalone exe.
 
-[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.4...v0.1.5
