@@ -2,32 +2,38 @@ use crate::{app, config::Config};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering::Relaxed};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-    System::LibraryLoader::GetModuleHandleW,
+    System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
     UI::{
         Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON, VK_RBUTTON},
         WindowsAndMessaging::{
-            CallNextHookEx, PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, HHOOK,
-            KBDLLHOOKSTRUCT, LLKHF_INJECTED, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
+            CallNextHookEx, GetMessageW, PostMessageW, PostThreadMessageW, SetWindowsHookExW,
+            UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, WH_KEYBOARD_LL,
+            WM_KEYDOWN, WM_QUIT, WM_SYSKEYDOWN,
         },
     },
 };
 
 static HOST: AtomicIsize = AtomicIsize::new(0);
-static HOOK: AtomicIsize = AtomicIsize::new(0);
 static CONVERT: AtomicU32 = AtomicU32::new(0);
 static MODIFY: AtomicU32 = AtomicU32::new(0);
 static HELD: AtomicU32 = AtomicU32::new(0);
 pub static ESCAPE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+static THREAD: AtomicU32 = AtomicU32::new(0);
+
 pub fn install(host: HWND, config: &Config) {
     set_keys(config);
     HOST.store(host.0 as isize, Relaxed);
-    unsafe {
+    std::thread::spawn(|| unsafe {
+        THREAD.store(GetCurrentThreadId(), Relaxed);
         let module = GetModuleHandleW(None).ok().map(Into::into);
-        if let Ok(h) = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), module, 0) {
-            HOOK.store(h.0 as isize, Relaxed);
-        }
-    }
+        let Ok(hook) = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), module, 0) else {
+            return;
+        };
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
+        let _ = UnhookWindowsHookEx(hook);
+    });
 }
 
 pub fn set_keys(config: &Config) {
@@ -36,10 +42,10 @@ pub fn set_keys(config: &Config) {
 }
 
 pub fn uninstall() {
-    let h = HOOK.swap(0, Relaxed);
-    if h != 0 {
+    let thread = THREAD.swap(0, Relaxed);
+    if thread != 0 {
         unsafe {
-            let _ = UnhookWindowsHookEx(HHOOK(h as _));
+            let _ = PostThreadMessageW(thread, WM_QUIT, WPARAM(0), LPARAM(0));
         }
     }
 }
