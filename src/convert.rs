@@ -943,6 +943,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs ffmpeg with libaom, libwebp and libvpx"]
     fn real_ffmpeg_round_trip() {
         if command(ffmpeg()).arg("-version").output().is_err() {
             return;

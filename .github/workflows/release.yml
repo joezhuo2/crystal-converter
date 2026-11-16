@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          if ($tag -ne $version) { Write-Error "Tag v$tag does not match Cargo.toml version $version"; exit 1 }
+      - run: cargo build --release --locked
+      - name: Fetch ffmpeg
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip ffmpeg
+          $bin = Get-ChildItem ffmpeg -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          $root = Split-Path $bin.DirectoryName
+          New-Item -ItemType Directory dist/pkg -Force | Out-Null
+          Copy-Item $bin.FullName dist/pkg/
+          Copy-Item (Join-Path $root LICENSE) dist/pkg/FFMPEG-LICENSE.txt
+          "Bundled ffmpeg: $(Split-Path $root -Leaf) from https://www.gyan.dev/ffmpeg/builds/ under the GPLv3. Source: https://github.com/FFmpeg/FFmpeg" |
+            Out-File dist/pkg/FFMPEG-NOTICE.txt -Encoding utf8
+      - name: Package
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          Copy-Item target/release/crystal-converter.exe, LICENSE, README.md dist/pkg/
+          Compress-Archive dist/pkg/* "dist/crystal-converter_${v}_x64.zip"
+          Copy-Item target/release/crystal-converter.exe "dist/crystal-converter_${v}_x64.exe"
+      - name: Create draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.exe --draft --title "$GITHUB_REF_NAME" --generate-notes
