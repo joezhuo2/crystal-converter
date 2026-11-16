@@ -12,7 +12,13 @@ pub enum Category {
 }
 
 impl Category {
-    pub const ALL: [Category; 5] = [Self::Any, Self::Image, Self::Video, Self::Audio, Self::Document];
+    pub const ALL: [Category; 5] = [
+        Self::Any,
+        Self::Image,
+        Self::Video,
+        Self::Audio,
+        Self::Document,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -87,7 +93,11 @@ impl Default for Preset {
 
 impl Preset {
     pub fn named(name: &str, category: Category) -> Self {
-        Self { name: name.into(), category, ..Default::default() }
+        Self {
+            name: name.into(),
+            category,
+            ..Default::default()
+        }
     }
 
     pub fn convert_to(format: &str) -> Self {
@@ -173,7 +183,9 @@ impl Config {
     }
 
     pub fn load() -> Self {
-        let Ok(text) = fs::read_to_string(path()) else { return Self::default() };
+        let Ok(text) = fs::read_to_string(path()) else {
+            return Self::default();
+        };
         serde_json::from_str(&text).unwrap_or_else(|_| {
             let _ = fs::rename(path(), dir().join("config.json.bak"));
             Self::default()
@@ -194,7 +206,8 @@ mod tests {
 
     #[test]
     fn partial_json_fills_defaults() {
-        let c: Config = serde_json::from_str(r#"{"sounds":false,"presets":[{"name":"x"}]}"#).unwrap();
+        let c: Config =
+            serde_json::from_str(r#"{"sounds":false,"presets":[{"name":"x"}]}"#).unwrap();
         assert!(!c.sounds);
         assert_eq!(c.close_delay_ms, 1500);
         assert_eq!(c.presets[0].wheel, WheelKind::Modify);

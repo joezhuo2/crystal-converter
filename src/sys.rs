@@ -2,7 +2,9 @@ use crate::config::Config;
 use std::{env, path::Path};
 use windows::{
     core::{HSTRING, PCWSTR},
-    Win32::System::Registry::{RegDeleteKeyValueW, RegDeleteTreeW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ},
+    Win32::System::Registry::{
+        RegDeleteKeyValueW, RegDeleteTreeW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ,
+    },
 };
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -31,12 +33,20 @@ pub fn apply(config: &Config) {
         if config.launch_at_login {
             reg_set(RUN_KEY, Some(RUN_VALUE), &quoted);
         } else {
-            let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, &HSTRING::from(RUN_KEY), &HSTRING::from(RUN_VALUE));
+            let _ = RegDeleteKeyValueW(
+                HKEY_CURRENT_USER,
+                &HSTRING::from(RUN_KEY),
+                &HSTRING::from(RUN_VALUE),
+            );
         }
         if config.context_menu {
             reg_set(MENU_KEY, None, "Convert with Crystal Converter");
             reg_set(MENU_KEY, Some("Icon"), &exe.display().to_string());
-            reg_set(&format!(r"{MENU_KEY}\command"), None, &format!("{quoted} --open \"%1\""));
+            reg_set(
+                &format!(r"{MENU_KEY}\command"),
+                None,
+                &format!("{quoted} --open \"%1\""),
+            );
         } else {
             let _ = RegDeleteTreeW(HKEY_CURRENT_USER, &HSTRING::from(MENU_KEY));
         }
@@ -49,13 +59,16 @@ pub fn open(target: &str) {
 
 pub fn reveal(path: &Path) {
     use std::os::windows::process::CommandExt;
-    let _ = std::process::Command::new("explorer").raw_arg(format!("/select,\"{}\"", path.display())).spawn();
+    let _ = std::process::Command::new("explorer")
+        .raw_arg(format!("/select,\"{}\"", path.display()))
+        .spawn();
 }
 
 pub fn recycle(paths: &[std::path::PathBuf]) -> bool {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::UI::Shell::{
-        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE, SHFILEOPSTRUCTW,
+        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE,
+        SHFILEOPSTRUCTW,
     };
     let existing: Vec<_> = paths.iter().filter(|p| p.exists()).collect();
     if existing.is_empty() {
@@ -95,13 +108,20 @@ pub fn copy_files(owner: windows::Win32::Foundation::HWND, paths: &[std::path::P
     wide.push(0);
     let header = std::mem::size_of::<DROPFILES>();
     unsafe {
-        let Ok(mem) = GlobalAlloc(GMEM_MOVEABLE, header + wide.len() * 2) else { return false };
+        let Ok(mem) = GlobalAlloc(GMEM_MOVEABLE, header + wide.len() * 2) else {
+            return false;
+        };
         let ptr = GlobalLock(mem) as *mut u8;
         if ptr.is_null() {
             let _ = GlobalFree(Some(mem));
             return false;
         }
-        let df = DROPFILES { pFiles: header as u32, pt: POINT::default(), fNC: false.into(), fWide: true.into() };
+        let df = DROPFILES {
+            pFiles: header as u32,
+            pt: POINT::default(),
+            fNC: false.into(),
+            fWide: true.into(),
+        };
         std::ptr::write_unaligned(ptr.cast::<DROPFILES>(), df);
         std::ptr::copy_nonoverlapping(wide.as_ptr().cast::<u8>(), ptr.add(header), wide.len() * 2);
         let _ = GlobalUnlock(mem);
@@ -128,7 +148,10 @@ pub enum Sound {
 
 fn synth(notes: &[(f32, f32, f32)]) -> Vec<u8> {
     const RATE: u32 = 44100;
-    let total = notes.iter().map(|(_, start, dur)| start + dur).fold(0.0, f32::max);
+    let total = notes
+        .iter()
+        .map(|(_, start, dur)| start + dur)
+        .fold(0.0, f32::max);
     let n = (total * RATE as f32) as usize;
     let mut samples = vec![0f32; n];
     for &(freq, start, dur) in notes {
@@ -143,7 +166,10 @@ fn synth(notes: &[(f32, f32, f32)]) -> Vec<u8> {
         }
     }
     let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs())).max(1e-6);
-    let data: Vec<u8> = samples.iter().flat_map(|s| ((s / peak * 0.32 * 32767.0) as i16).to_le_bytes()).collect();
+    let data: Vec<u8> = samples
+        .iter()
+        .flat_map(|s| ((s / peak * 0.32 * 32767.0) as i16).to_le_bytes())
+        .collect();
     let mut wav = Vec::with_capacity(44 + data.len());
     wav.extend_from_slice(b"RIFF");
     wav.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
@@ -169,10 +195,65 @@ pub fn play(sound: Sound) {
     static ERROR: OnceLock<Vec<u8>> = OnceLock::new();
     let wav = match sound {
         Sound::Start => START.get_or_init(|| synth(&[(659.25, 0.0, 0.12), (987.77, 0.07, 0.2)])),
-        Sound::Done => DONE.get_or_init(|| synth(&[(783.99, 0.0, 0.35), (1046.5, 0.09, 0.45), (1567.98, 0.18, 0.55)])),
+        Sound::Done => DONE.get_or_init(|| {
+            synth(&[
+                (783.99, 0.0, 0.35),
+                (1046.5, 0.09, 0.45),
+                (1567.98, 0.18, 0.55),
+            ])
+        }),
         Sound::Error => ERROR.get_or_init(|| synth(&[(311.13, 0.0, 0.2), (233.08, 0.13, 0.32)])),
     };
     unsafe {
-        let _ = PlaySoundW(PCWSTR(wav.as_ptr().cast()), None, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+        let _ = PlaySoundW(
+            PCWSTR(wav.as_ptr().cast()),
+            None,
+            SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
+        );
     }
+}
+
+pub fn pick_folder() -> Option<std::path::PathBuf> {
+    use windows::Win32::{
+        System::Com::{
+            CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_INPROC_SERVER,
+            COINIT_APARTMENTTHREADED,
+        },
+        UI::Shell::{FileOpenDialog, IFileOpenDialog, FOS_PICKFOLDERS, SIGDN_FILESYSPATH},
+    };
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let dialog: IFileOpenDialog =
+            CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+        dialog
+            .SetOptions(dialog.GetOptions().ok()? | FOS_PICKFOLDERS)
+            .ok()?;
+        dialog.Show(None).ok()?;
+        let name = dialog
+            .GetResult()
+            .ok()?
+            .GetDisplayName(SIGDN_FILESYSPATH)
+            .ok()?;
+        let path = name.to_string().ok();
+        CoTaskMemFree(Some(name.0 as _));
+        path.map(Into::into)
+    }
+}
+
+pub fn winget_install(package: &str) -> bool {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("winget")
+        .args([
+            "install",
+            "--id",
+            package,
+            "-e",
+            "--silent",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+        ])
+        .creation_flags(0x0800_0000)
+        .stdin(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }

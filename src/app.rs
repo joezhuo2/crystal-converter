@@ -5,20 +5,24 @@ use crate::{
     update,
     wheel::Wheel,
 };
-use std::{cell::RefCell, env, os::windows::ffi::OsStrExt, path::PathBuf, process::Command, time::Duration};
+use std::{
+    cell::RefCell, env, os::windows::ffi::OsStrExt, path::PathBuf, process::Command, time::Duration,
+};
 use windows::{
     core::{w, PCWSTR},
     Win32::{
         Foundation::{GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM},
         System::{
-            DataExchange::COPYDATASTRUCT, LibraryLoader::GetModuleHandleW, Ole::OleInitialize, Threading::CreateMutexW,
+            DataExchange::COPYDATASTRUCT, LibraryLoader::GetModuleHandleW, Ole::OleInitialize,
+            Threading::CreateMutexW,
         },
         UI::{
             HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2},
             WindowsAndMessaging::{
-                CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowExW, FindWindowW, GetMessageW, PostMessageW,
-                PostQuitMessage, RegisterClassExW, SendMessageW, SetForegroundWindow, ShowWindow, TranslateMessage,
-                HWND_MESSAGE, MSG, SW_RESTORE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_COPYDATA, WNDCLASSEXW,
+                CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowExW, FindWindowW,
+                GetMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW,
+                SetForegroundWindow, ShowWindow, TranslateMessage, HWND_MESSAGE, MSG, SW_RESTORE,
+                WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_COPYDATA, WNDCLASSEXW,
             },
         },
     },
@@ -63,7 +67,11 @@ pub fn post(host: isize, msg: u32) {
 }
 
 pub fn find_host() -> Option<HWND> {
-    unsafe { FindWindowExW(Some(HWND_MESSAGE), None, HOST_CLASS, None).ok().filter(|h| !h.is_invalid()) }
+    unsafe {
+        FindWindowExW(Some(HWND_MESSAGE), None, HOST_CLASS, None)
+            .ok()
+            .filter(|h| !h.is_invalid())
+    }
 }
 
 fn forward(files: &[PathBuf]) {
@@ -73,9 +81,18 @@ fn forward(files: &[PathBuf]) {
         data.extend(f.as_os_str().encode_wide());
         data.push(0);
     }
-    let cds = COPYDATASTRUCT { dwData: 1, cbData: (data.len() * 2) as u32, lpData: data.as_mut_ptr().cast() };
+    let cds = COPYDATASTRUCT {
+        dwData: 1,
+        cbData: (data.len() * 2) as u32,
+        lpData: data.as_mut_ptr().cast(),
+    };
     unsafe {
-        SendMessageW(host, WM_COPYDATA, Some(WPARAM(0)), Some(LPARAM(&cds as *const _ as isize)));
+        SendMessageW(
+            host,
+            WM_COPYDATA,
+            Some(WPARAM(0)),
+            Some(LPARAM(&cds as *const _ as isize)),
+        );
     }
 }
 
@@ -154,7 +171,12 @@ fn kind(wparam: WPARAM) -> WheelKind {
     }
 }
 
-unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn host_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match msg {
         WM_HOTKEY_DOWN => {
             with_app(|a| a.wheel.show(kind(wparam), &a.config));
@@ -193,9 +215,14 @@ unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
         }
         WM_COPYDATA => {
             let cds = unsafe { &*(lparam.0 as *const COPYDATASTRUCT) };
-            let data = unsafe { std::slice::from_raw_parts(cds.lpData as *const u16, cds.cbData as usize / 2) };
-            let files: Vec<PathBuf> =
-                String::from_utf16_lossy(data).split('\0').filter(|s| !s.is_empty()).map(PathBuf::from).collect();
+            let data = unsafe {
+                std::slice::from_raw_parts(cds.lpData as *const u16, cds.cbData as usize / 2)
+            };
+            let files: Vec<PathBuf> = String::from_utf16_lossy(data)
+                .split('\0')
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+                .collect();
             if files.is_empty() {
                 open_settings();
             } else {
@@ -259,7 +286,14 @@ pub fn run(files: Vec<PathBuf>) {
             wheel.open_files(files, &config);
         }
         APP.with(|a| {
-            *a.borrow_mut() = Some(App { config, host: host_id, tray, wheel, recent: Vec::new(), last: Vec::new() })
+            *a.borrow_mut() = Some(App {
+                config,
+                host: host_id,
+                tray,
+                wheel,
+                recent: Vec::new(),
+                last: Vec::new(),
+            })
         });
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {

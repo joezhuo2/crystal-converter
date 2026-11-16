@@ -6,8 +6,8 @@ use windows::Win32::{
     UI::{
         Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON, VK_RBUTTON},
         WindowsAndMessaging::{
-            CallNextHookEx, PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT,
-            LLKHF_INJECTED, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
+            CallNextHookEx, PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, HHOOK,
+            KBDLLHOOKSTRUCT, LLKHF_INJECTED, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
         },
     },
 };
@@ -46,12 +46,19 @@ pub fn uninstall() {
 
 fn post(msg: u32, wparam: usize) {
     unsafe {
-        let _ = PostMessageW(Some(HWND(HOST.load(Relaxed) as _)), msg, WPARAM(wparam), LPARAM(0));
+        let _ = PostMessageW(
+            Some(HWND(HOST.load(Relaxed) as _)),
+            msg,
+            WPARAM(wparam),
+            LPARAM(0),
+        );
     }
 }
 
 fn mouse_down() -> bool {
-    unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 || GetAsyncKeyState(VK_RBUTTON.0 as i32) < 0 }
+    unsafe {
+        GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 || GetAsyncKeyState(VK_RBUTTON.0 as i32) < 0
+    }
 }
 
 unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

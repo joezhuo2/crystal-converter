@@ -17,8 +17,16 @@ const WHITE_BG: &str = "format=rgba,split[fg][bg];[bg]lutrgb=r=255:g=255:b=255:a
 const MIB_KBIT: f64 = 8192.0;
 
 pub enum Event {
-    Progress { index: usize, total: usize, fraction: Option<f32>, name: String },
-    Done { outputs: Vec<PathBuf>, failed: Vec<String> },
+    Progress {
+        index: usize,
+        total: usize,
+        fraction: Option<f32>,
+        name: String,
+    },
+    Done {
+        outputs: Vec<PathBuf>,
+        failed: Vec<String>,
+    },
     Failed(String),
     Cancelled,
 }
@@ -38,7 +46,8 @@ pub struct Info {
 }
 
 pub fn run(job: Job, cancel: &AtomicBool, emit: &mut dyn FnMut(Event)) {
-    let merge_pdf = job.preset.format == "pdf" && job.files.iter().all(|f| detect(f) == Some(Category::Image));
+    let merge_pdf =
+        job.preset.format == "pdf" && job.files.iter().all(|f| detect(f) == Some(Category::Image));
     let groups: Vec<Vec<PathBuf>> = if merge_pdf {
         vec![job.files.clone()]
     } else {
@@ -49,9 +58,19 @@ pub fn run(job: Job, cancel: &AtomicBool, emit: &mut dyn FnMut(Event)) {
     let mut failed = Vec::new();
     for (index, group) in groups.iter().enumerate() {
         let name = file_name(&group[0]);
-        emit(Event::Progress { index, total, fraction: None, name: name.clone() });
+        emit(Event::Progress {
+            index,
+            total,
+            fraction: None,
+            name: name.clone(),
+        });
         let result = convert(group, &job, cancel, &mut |f| {
-            emit(Event::Progress { index, total, fraction: Some(f), name: name.clone() })
+            emit(Event::Progress {
+                index,
+                total,
+                fraction: Some(f),
+                name: name.clone(),
+            })
         });
         if cancel.load(Ordering::Relaxed) {
             emit(Event::Cancelled);
@@ -62,15 +81,28 @@ pub fn run(job: Job, cancel: &AtomicBool, emit: &mut dyn FnMut(Event)) {
             Err(e) => failed.push(format!("{name}: {e}")),
         }
     }
-    emit(if outputs.is_empty() { Event::Failed(failed.join("\n")) } else { Event::Done { outputs, failed } });
+    emit(if outputs.is_empty() {
+        Event::Failed(failed.join("\n"))
+    } else {
+        Event::Done { outputs, failed }
+    });
 }
 
-fn convert(group: &[PathBuf], job: &Job, cancel: &AtomicBool, progress: &mut dyn FnMut(f32)) -> Result<PathBuf, String> {
+fn convert(
+    group: &[PathBuf],
+    job: &Job,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<PathBuf, String> {
     let input = &group[0];
     let category = detect(input).ok_or("unsupported file type")?;
     let in_ext = ext_of(input);
     let p = &job.preset;
-    let fmt = if p.format.is_empty() { in_ext.clone() } else { p.format.clone() };
+    let fmt = if p.format.is_empty() {
+        in_ext.clone()
+    } else {
+        p.format.clone()
+    };
     let suffix = (fmt == in_ext).then(|| slug(&p.name));
     let dir = match &job.out_dir {
         Some(d) => d.clone(),
@@ -81,7 +113,16 @@ fn convert(group: &[PathBuf], job: &Job, cancel: &AtomicBool, progress: &mut dyn
     let result = match category {
         Category::Document => office(input, &fmt, &out),
         Category::Image if fmt == "pdf" => images_to_pdf(group, &out, p, cancel, progress),
-        _ => ffmpeg_convert(input, &out, &fmt, category, p, job.hardware, cancel, progress),
+        _ => ffmpeg_convert(
+            input,
+            &out,
+            &fmt,
+            category,
+            p,
+            job.hardware,
+            cancel,
+            progress,
+        ),
     };
     if result.is_err() {
         let _ = fs::remove_file(&out);
@@ -137,10 +178,19 @@ fn has_ops(p: &Preset) -> bool {
 }
 
 fn base_args(input: &Path) -> Vec<String> {
-    let mut a: Vec<String> =
-        ["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-progress", "pipe:1", "-nostats", "-i"]
-            .map(String::from)
-            .to_vec();
+    let mut a: Vec<String> = [
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-loglevel",
+        "error",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        "-i",
+    ]
+    .map(String::from)
+    .to_vec();
     a.push(input.to_string_lossy().into());
     a
 }
@@ -154,10 +204,16 @@ fn image_filters(p: &Preset) -> Vec<String> {
         _ => {}
     }
     if p.scale_pct > 0 && p.scale_pct < 100 {
-        vf.push(format!("scale=trunc(iw*{0}/200)*2:trunc(ih*{0}/200)*2", p.scale_pct));
+        vf.push(format!(
+            "scale=trunc(iw*{0}/200)*2:trunc(ih*{0}/200)*2",
+            p.scale_pct
+        ));
     }
     if p.max_dim > 0 {
-        vf.push(format!("scale=w='if(gte(iw,ih),min(iw,{0}),-2)':h='if(gte(iw,ih),-2,min(ih,{0}))'", p.max_dim));
+        vf.push(format!(
+            "scale=w='if(gte(iw,ih),min(iw,{0}),-2)':h='if(gte(iw,ih),-2,min(ih,{0}))'",
+            p.max_dim
+        ));
     }
     if p.fps > 0 {
         vf.push(format!("fps={}", p.fps));
@@ -196,13 +252,21 @@ pub fn build_args(
     let anim_gif_in = category == Category::Image && ext_of(input) == "gif";
     let audio = info.has_audio && !p.mute;
     let target = target_bitrates(p.max_size_mb, info.duration, audio);
-    let crf = |default: u32| if p.quality > 0 { 51 - p.quality.min(100) * 33 / 100 } else { default };
+    let crf = |default: u32| {
+        if p.quality > 0 {
+            51 - p.quality.min(100) * 33 / 100
+        } else {
+            default
+        }
+    };
 
     if category == Category::Image && matches!(fmt, "jpg" | "bmp") {
         vf.push(WHITE_BG.into());
     }
     match fmt {
-        "ico" => vf.push("scale=w='min(iw,256)':h='min(ih,256)':force_original_aspect_ratio=decrease".into()),
+        "ico" => vf.push(
+            "scale=w='min(iw,256)':h='min(ih,256)':force_original_aspect_ratio=decrease".into(),
+        ),
         "gif" => {
             if category == Category::Video {
                 if p.fps == 0 {
@@ -248,12 +312,36 @@ pub fn build_args(
             push(&mut a, &["-c:v", enc]);
             match (enc, target) {
                 (_, Some((v, _))) => {
-                    a.extend(["-b:v".into(), format!("{v}k"), "-maxrate".into(), format!("{v}k"), "-bufsize".into(), format!("{}k", v * 2)]);
+                    a.extend([
+                        "-b:v".into(),
+                        format!("{v}k"),
+                        "-maxrate".into(),
+                        format!("{v}k"),
+                        "-bufsize".into(),
+                        format!("{}k", v * 2),
+                    ]);
                 }
-                ("h264_nvenc", None) => a.extend(["-preset".into(), "p5".into(), "-cq".into(), crf(24).to_string()]),
+                ("h264_nvenc", None) => a.extend([
+                    "-preset".into(),
+                    "p5".into(),
+                    "-cq".into(),
+                    crf(24).to_string(),
+                ]),
                 ("h264_qsv", None) => a.extend(["-global_quality".into(), crf(24).to_string()]),
-                ("h264_amf", None) => a.extend(["-rc".into(), "cqp".into(), "-qp_i".into(), crf(22).to_string(), "-qp_p".into(), crf(24).to_string()]),
-                (_, None) => a.extend(["-preset".into(), "medium".into(), "-crf".into(), crf(23).to_string()]),
+                ("h264_amf", None) => a.extend([
+                    "-rc".into(),
+                    "cqp".into(),
+                    "-qp_i".into(),
+                    crf(22).to_string(),
+                    "-qp_p".into(),
+                    crf(24).to_string(),
+                ]),
+                (_, None) => a.extend([
+                    "-preset".into(),
+                    "medium".into(),
+                    "-crf".into(),
+                    crf(23).to_string(),
+                ]),
             }
             push(&mut a, &["-pix_fmt", "yuv420p"]);
             if audio {
@@ -264,10 +352,27 @@ pub fn build_args(
             }
         }
         "webm" => {
-            push(&mut a, &["-c:v", "libvpx-vp9", "-row-mt", "1", "-deadline", "good", "-cpu-used", "4"]);
+            push(
+                &mut a,
+                &[
+                    "-c:v",
+                    "libvpx-vp9",
+                    "-row-mt",
+                    "1",
+                    "-deadline",
+                    "good",
+                    "-cpu-used",
+                    "4",
+                ],
+            );
             match target {
                 Some((v, _)) => a.extend(["-b:v".into(), format!("{v}k")]),
-                None => a.extend(["-crf".into(), crf(33).to_string(), "-b:v".into(), "0".into()]),
+                None => a.extend([
+                    "-crf".into(),
+                    crf(33).to_string(),
+                    "-b:v".into(),
+                    "0".into(),
+                ]),
             }
             if audio {
                 a.extend(["-c:a".into(), "libopus".into(), "-b:a".into(), abr(128)]);
@@ -288,10 +393,22 @@ pub fn build_args(
                 push(&mut a, &["-q:a", "2"]);
             }
         }
-        "m4a" | "aac" => a.extend(["-vn".into(), "-c:a".into(), "aac".into(), "-b:a".into(), abr(192)]),
+        "m4a" | "aac" => a.extend([
+            "-vn".into(),
+            "-c:a".into(),
+            "aac".into(),
+            "-b:a".into(),
+            abr(192),
+        ]),
         "wav" => push(&mut a, &["-vn", "-c:a", "pcm_s16le"]),
         "flac" => push(&mut a, &["-vn", "-c:a", "flac"]),
-        "opus" => a.extend(["-vn".into(), "-c:a".into(), "libopus".into(), "-b:a".into(), abr(128)]),
+        "opus" => a.extend([
+            "-vn".into(),
+            "-c:a".into(),
+            "libopus".into(),
+            "-b:a".into(),
+            abr(128),
+        ]),
         "ogg" => {
             push(&mut a, &["-vn", "-c:a", "libvorbis"]);
             if p.bitrate_kbps > 0 || target.is_some() {
@@ -301,17 +418,42 @@ pub fn build_args(
             }
         }
         "jpg" => {
-            let q = if p.quality > 0 { 2 + (100 - p.quality.min(100)) * 29 / 99 } else { 3 };
-            a.extend(["-q:v".into(), q.to_string(), "-frames:v".into(), "1".into(), "-update".into(), "1".into()]);
+            let q = if p.quality > 0 {
+                2 + (100 - p.quality.min(100)) * 29 / 99
+            } else {
+                3
+            };
+            a.extend([
+                "-q:v".into(),
+                q.to_string(),
+                "-frames:v".into(),
+                "1".into(),
+                "-update".into(),
+                "1".into(),
+            ]);
         }
         "png" | "bmp" | "tiff" => push(&mut a, &["-frames:v", "1", "-update", "1"]),
         "ico" => push(&mut a, &["-frames:v", "1"]),
         "avif" => {
-            push(&mut a, &["-c:v", "libaom-av1", "-still-picture", "1", "-frames:v", "1"]);
+            push(
+                &mut a,
+                &[
+                    "-c:v",
+                    "libaom-av1",
+                    "-still-picture",
+                    "1",
+                    "-frames:v",
+                    "1",
+                ],
+            );
             a.extend(["-crf".into(), crf(30).to_string()]);
         }
         "webp" => {
-            let q = if p.quality > 0 { p.quality.min(100) } else { 85 };
+            let q = if p.quality > 0 {
+                p.quality.min(100)
+            } else {
+                85
+            };
             if anim_gif_in {
                 push(&mut a, &["-c:v", "libwebp_anim", "-loop", "0"]);
             } else {
@@ -340,30 +482,34 @@ pub fn build_args(
     a
 }
 
+fn path_dirs() -> Vec<PathBuf> {
+    env::split_paths(&env::var_os("PATH").unwrap_or_default()).collect()
+}
+
+pub fn find_ffmpeg() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| vec![d.join("ffmpeg.exe")]))
+        .unwrap_or_default();
+    if let Some(local) = env::var_os("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(local).join(r"Microsoft\WinGet\Links\ffmpeg.exe"));
+    }
+    candidates.extend(path_dirs().into_iter().map(|d| d.join("ffmpeg.exe")));
+    candidates.into_iter().find(|p| p.exists())
+}
+
 pub fn ffmpeg() -> PathBuf {
-    static P: OnceLock<PathBuf> = OnceLock::new();
-    P.get_or_init(|| {
-        env::current_exe()
-            .ok()
-            .and_then(|e| e.parent().map(|d| d.join("ffmpeg.exe")))
-            .filter(|p| p.exists())
-            .unwrap_or_else(|| "ffmpeg".into())
-    })
-    .clone()
+    find_ffmpeg().unwrap_or_else(|| "ffmpeg".into())
 }
 
 pub fn soffice() -> Option<PathBuf> {
-    static S: OnceLock<Option<PathBuf>> = OnceLock::new();
-    S.get_or_init(|| {
-        let mut candidates: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)"]
-            .iter()
-            .filter_map(env::var_os)
-            .map(|p| PathBuf::from(p).join(r"LibreOffice\program\soffice.exe"))
-            .collect();
-        candidates.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()).map(|d| d.join("soffice.exe")));
-        candidates.into_iter().find(|p| p.exists())
-    })
-    .clone()
+    let mut candidates: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)"]
+        .iter()
+        .filter_map(env::var_os)
+        .map(|p| PathBuf::from(p).join(r"LibreOffice\program\soffice.exe"))
+        .collect();
+    candidates.extend(path_dirs().into_iter().map(|d| d.join("soffice.exe")));
+    candidates.into_iter().find(|p| p.exists())
 }
 
 fn spawn_err(e: io::Error) -> String {
@@ -381,20 +527,43 @@ fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
 }
 
 pub fn probe(input: &Path) -> Result<Info, String> {
-    let out = command(ffmpeg()).arg("-hide_banner").arg("-i").arg(input).output().map_err(spawn_err)?;
+    let out = command(ffmpeg())
+        .arg("-hide_banner")
+        .arg("-i")
+        .arg(input)
+        .output()
+        .map_err(spawn_err)?;
     Ok(parse_probe(&String::from_utf8_lossy(&out.stderr)))
 }
 
 fn parse_probe(text: &str) -> Info {
-    let duration = text.split("Duration: ").nth(1).and_then(|s| s.get(..11)).and_then(|hms| {
-        let mut parts = hms.split(':').map(|x| x.parse::<f64>().ok());
-        Some(parts.next()?? * 3600.0 + parts.next()?? * 60.0 + parts.next()??)
-    });
-    Info { duration, has_audio: text.contains("Audio:"), has_video: text.contains("Video:") }
+    let duration = text
+        .split("Duration: ")
+        .nth(1)
+        .and_then(|s| s.get(..11))
+        .and_then(|hms| {
+            let mut parts = hms.split(':').map(|x| x.parse::<f64>().ok());
+            Some(parts.next()?? * 3600.0 + parts.next()?? * 60.0 + parts.next()??)
+        });
+    Info {
+        duration,
+        has_audio: text.contains("Audio:"),
+        has_video: text.contains("Video:"),
+    }
 }
 
-fn run_ffmpeg(args: &[String], duration: Option<f64>, cancel: &AtomicBool, progress: &mut dyn FnMut(f32)) -> Result<(), String> {
-    let mut child = command(ffmpeg()).args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(spawn_err)?;
+fn run_ffmpeg(
+    args: &[String],
+    duration: Option<f64>,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<(), String> {
+    let mut child = command(ffmpeg())
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(spawn_err)?;
     let mut stderr = child.stderr.take().expect("piped stderr");
     let errors = std::thread::spawn(move || {
         let mut s = String::new();
@@ -421,32 +590,62 @@ fn run_ffmpeg(args: &[String], duration: Option<f64>, cancel: &AtomicBool, progr
     if status.success() {
         Ok(())
     } else {
-        Err(err.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("ffmpeg failed").to_string())
+        Err(err
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("ffmpeg failed")
+            .to_string())
     }
 }
 
 fn hw_encoder() -> Option<&'static str> {
     static E: OnceLock<Option<&'static str>> = OnceLock::new();
     *E.get_or_init(|| {
-        ["h264_nvenc", "h264_qsv", "h264_amf"].into_iter().find(|enc| {
-            command(ffmpeg())
-                .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=s=256x256:d=0.1"])
-                .args(["-frames:v", "1", "-c:v", enc, "-f", "null", "-"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .is_ok_and(|s| s.success())
-        })
+        ["h264_nvenc", "h264_qsv", "h264_amf"]
+            .into_iter()
+            .find(|enc| {
+                command(ffmpeg())
+                    .args([
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "color=s=256x256:d=0.1",
+                    ])
+                    .args(["-frames:v", "1", "-c:v", enc, "-f", "null", "-"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success())
+            })
     })
 }
 
 fn office(input: &Path, fmt: &str, out: &Path) -> Result<(), String> {
     let soffice = soffice().ok_or("LibreOffice is needed to convert documents")?;
-    let tmp = env::temp_dir().join(format!("crystal-converter-{}-{}", std::process::id(), next_id()));
+    let tmp = env::temp_dir().join(format!(
+        "crystal-converter-{}-{}",
+        std::process::id(),
+        next_id()
+    ));
     fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-    let filter = if fmt == "txt" { "txt:Text (encoded):UTF8" } else { fmt };
+    let filter = if fmt == "txt" {
+        "txt:Text (encoded):UTF8"
+    } else {
+        fmt
+    };
     let status = command(soffice)
-        .args(["--headless", "--norestore", "--convert-to", filter, "--outdir"])
+        .args([
+            "--headless",
+            "--norestore",
+            "--convert-to",
+            filter,
+            "--outdir",
+        ])
         .arg(&tmp)
         .arg(input)
         .status()
@@ -463,20 +662,42 @@ fn office(input: &Path, fmt: &str, out: &Path) -> Result<(), String> {
 
 fn move_file(from: &Path, to: &Path) -> Result<(), String> {
     fs::rename(from, to)
-        .or_else(|_| fs::copy(from, to).map(|_| ()).and_then(|_| fs::remove_file(from)))
+        .or_else(|_| {
+            fs::copy(from, to)
+                .map(|_| ())
+                .and_then(|_| fs::remove_file(from))
+        })
         .map_err(|e| e.to_string())
 }
 
-fn images_to_pdf(group: &[PathBuf], out: &Path, p: &Preset, cancel: &AtomicBool, progress: &mut dyn FnMut(f32)) -> Result<(), String> {
+fn images_to_pdf(
+    group: &[PathBuf],
+    out: &Path,
+    p: &Preset,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<(), String> {
     let mut pages = Vec::new();
     for (i, img) in group.iter().enumerate() {
-        let tmp = env::temp_dir().join(format!("crystal-converter-{}-{}.jpg", std::process::id(), next_id()));
+        let tmp = env::temp_dir().join(format!(
+            "crystal-converter-{}-{}.jpg",
+            std::process::id(),
+            next_id()
+        ));
         let mut vf = image_filters(p);
         vf.push(WHITE_BG.into());
         let mut args = base_args(img);
-        args.extend(["-vf".into(), vf.join(","), "-frames:v".into(), "1".into(), "-q:v".into(), "2".into()]);
+        args.extend([
+            "-vf".into(),
+            vf.join(","),
+            "-frames:v".into(),
+            "1".into(),
+            "-q:v".into(),
+            "2".into(),
+        ]);
         args.extend(["-update".into(), "1".into(), tmp.to_string_lossy().into()]);
-        let page = run_ffmpeg(&args, None, cancel, &mut |_| {}).and_then(|_| fs::read(&tmp).map_err(|e| e.to_string()));
+        let page = run_ffmpeg(&args, None, cancel, &mut |_| {})
+            .and_then(|_| fs::read(&tmp).map_err(|e| e.to_string()));
         let _ = fs::remove_file(&tmp);
         pages.push(page.map_err(|e| format!("{}: {e}", file_name(img)))?);
         progress((i + 1) as f32 / group.len() as f32);
@@ -535,7 +756,13 @@ pub fn pdf_from_jpegs(pages: &[Vec<u8>]) -> Result<Vec<u8>, String> {
         img.extend_from_slice(b"\nendstream");
         objs.push(img);
         let content = format!("q {pw:.2} 0 0 {ph:.2} 0 0 cm /Im0 Do Q");
-        objs.push(format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes());
+        objs.push(
+            format!(
+                "<< /Length {} >>\nstream\n{content}\nendstream",
+                content.len()
+            )
+            .into_bytes(),
+        );
     }
     let mut out = b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n".to_vec();
     let mut offsets = Vec::with_capacity(objs.len());
@@ -550,7 +777,13 @@ pub fn pdf_from_jpegs(pages: &[Vec<u8>]) -> Result<Vec<u8>, String> {
     for o in offsets {
         out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
     Ok(out)
 }
 
@@ -560,11 +793,15 @@ fn next_id() -> u32 {
 }
 
 pub fn file_name(p: &Path) -> String {
-    p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 fn stem(p: &Path) -> String {
-    p.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "output".into())
+    p.file_stem()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "output".into())
 }
 
 pub fn slug(name: &str) -> String {
@@ -575,7 +812,11 @@ pub fn slug(name: &str) -> String {
         .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '+' | '_'))
         .collect();
     let s = s.trim_matches('-').to_string();
-    if s.is_empty() { "edited".into() } else { s }
+    if s.is_empty() {
+        "edited".into()
+    } else {
+        s
+    }
 }
 
 pub fn unique_path(dir: &Path, stem: &str, suffix: Option<&str>, ext: &str) -> PathBuf {
@@ -599,7 +840,14 @@ mod tests {
     #[test]
     fn parses_probe_output() {
         let info = parse_probe("  Duration: 00:01:02.50, start: 0\n Stream #0:0: Video: h264\n Stream #0:1: Audio: aac");
-        assert_eq!(info, Info { duration: Some(62.5), has_audio: true, has_video: true });
+        assert_eq!(
+            info,
+            Info {
+                duration: Some(62.5),
+                has_audio: true,
+                has_video: true
+            }
+        );
         assert_eq!(parse_probe("Duration: N/A, bitrate").duration, None);
     }
 
@@ -620,32 +868,77 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("a.png"), b"x").unwrap();
         assert_eq!(unique_path(&dir, "a", None, "png"), dir.join("a (1).png"));
-        assert_eq!(unique_path(&dir, "a", Some("50"), "png"), dir.join("a-50.png"));
+        assert_eq!(
+            unique_path(&dir, "a", Some("50"), "png"),
+            dir.join("a-50.png")
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn pdf_has_valid_xref() {
-        let jpg = vec![0xFF, 0xD8, 0xFF, 0xC0, 0, 17, 8, 0, 16, 0, 32, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xFF, 0xD9];
+        let jpg = vec![
+            0xFF, 0xD8, 0xFF, 0xC0, 0, 17, 8, 0, 16, 0, 32, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1,
+            0xFF, 0xD9,
+        ];
         assert_eq!(jpeg_info(&jpg), Some((32, 16, 3)));
         let pdf = pdf_from_jpegs(&[jpg.clone(), jpg]).unwrap();
         let text = String::from_utf8_lossy(&pdf);
         assert!(text.contains("/Count 2"));
-        let xref: usize = text.rsplit("startxref\n").next().unwrap().lines().next().unwrap().parse().unwrap();
+        let xref: usize = text
+            .rsplit("startxref\n")
+            .next()
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
         assert!(pdf[xref..].starts_with(b"xref"));
     }
 
     #[test]
     fn builds_expected_args() {
-        let info = Info { duration: Some(10.0), has_audio: true, has_video: true };
+        let info = Info {
+            duration: Some(10.0),
+            has_audio: true,
+            has_video: true,
+        };
         let p = Preset::convert_to("mp4");
-        let a = build_args(Path::new("in.mov"), Path::new("out.mp4"), "mp4", Category::Video, &p, &info, None);
+        let a = build_args(
+            Path::new("in.mov"),
+            Path::new("out.mp4"),
+            "mp4",
+            Category::Video,
+            &p,
+            &info,
+            None,
+        );
         assert!(a.windows(2).any(|w| w == ["-c:v", "libx264"]));
         assert!(a.contains(&"+faststart".to_string()));
-        let a = build_args(Path::new("in.mov"), Path::new("out.mp3"), "mp3", Category::Video, &p, &info, None);
+        let a = build_args(
+            Path::new("in.mov"),
+            Path::new("out.mp3"),
+            "mp3",
+            Category::Video,
+            &p,
+            &info,
+            None,
+        );
         assert!(a.contains(&"-vn".to_string()) && !a.contains(&"-vf".to_string()));
-        let small = Preset { max_size_mb: 8.0, ..Preset::default() };
-        let a = build_args(Path::new("in.mp4"), Path::new("o.mp4"), "mp4", Category::Video, &small, &info, Some("h264_nvenc"));
+        let small = Preset {
+            max_size_mb: 8.0,
+            ..Preset::default()
+        };
+        let a = build_args(
+            Path::new("in.mp4"),
+            Path::new("o.mp4"),
+            "mp4",
+            Category::Video,
+            &small,
+            &info,
+            Some("h264_nvenc"),
+        );
         assert!(a.contains(&"-maxrate".to_string()) && a.contains(&"h264_nvenc".to_string()));
     }
 
@@ -658,38 +951,85 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let src = dir.join("clip.mp4");
         let made = command(ffmpeg())
-            .args(["-loglevel", "error", "-f", "lavfi", "-i", "testsrc=s=321x241:d=2", "-f", "lavfi", "-i", "sine=d=2"])
+            .args([
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=s=321x241:d=2",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=d=2",
+            ])
             .args(["-shortest", "-pix_fmt", "yuv420p", "-vf", "scale=320:240"])
             .arg(&src)
             .status()
             .unwrap();
         assert!(made.success());
         let png = dir.join("pic.png");
-        assert!(command(ffmpeg()).args(["-loglevel", "error", "-f", "lavfi", "-i", "testsrc=s=99x77:d=1", "-frames:v", "1"]).arg(&png).status().unwrap().success());
+        assert!(command(ffmpeg())
+            .args([
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=s=99x77:d=1",
+                "-frames:v",
+                "1"
+            ])
+            .arg(&png)
+            .status()
+            .unwrap()
+            .success());
         let cases: Vec<(PathBuf, Preset)> = vec![
             (src.clone(), Preset::convert_to("webm")),
             (src.clone(), Preset::convert_to("gif")),
             (src.clone(), Preset::convert_to("mp3")),
             (src.clone(), Preset::convert_to("mkv")),
-            (src.clone(), Preset { max_size_mb: 0.1, ..Preset::named("Tiny", Category::Video) }),
+            (
+                src.clone(),
+                Preset {
+                    max_size_mb: 0.1,
+                    ..Preset::named("Tiny", Category::Video)
+                },
+            ),
             (png.clone(), Preset::convert_to("jpg")),
             (png.clone(), Preset::convert_to("webp")),
             (png.clone(), Preset::convert_to("ico")),
             (png.clone(), Preset::convert_to("avif")),
             (png.clone(), Preset::convert_to("pdf")),
-            (png.clone(), Preset { scale_pct: 50, rotate: 90, ..Preset::named("Half", Category::Image) }),
+            (
+                png.clone(),
+                Preset {
+                    scale_pct: 50,
+                    rotate: 90,
+                    ..Preset::named("Half", Category::Image)
+                },
+            ),
         ];
         let cancel = AtomicBool::new(false);
         for (file, preset) in cases {
             let name = preset.name.clone();
             let mut outcome = None;
-            run(Job { files: vec![file], preset, out_dir: None, hardware: false }, &cancel, &mut |e| {
-                if let Event::Done { outputs, .. } = &e {
-                    outcome = Some(Ok(outputs[0].clone()));
-                } else if let Event::Failed(msg) = &e {
-                    outcome = Some(Err(msg.clone()));
-                }
-            });
+            run(
+                Job {
+                    files: vec![file],
+                    preset,
+                    out_dir: None,
+                    hardware: false,
+                },
+                &cancel,
+                &mut |e| {
+                    if let Event::Done { outputs, .. } = &e {
+                        outcome = Some(Ok(outputs[0].clone()));
+                    } else if let Event::Failed(msg) = &e {
+                        outcome = Some(Err(msg.clone()));
+                    }
+                },
+            );
             let out = outcome.unwrap().unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(fs::metadata(&out).unwrap().len() > 0, "{name}");
         }

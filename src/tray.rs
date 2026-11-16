@@ -68,7 +68,12 @@ impl Tray {
         ]);
         let w = wake.clone();
         TrayIconEvent::set_event_handler(Some(move |e: TrayIconEvent| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = e
+            {
                 QUEUE.lock().unwrap().push(TrayMsg::LeftClick);
                 w();
             }
@@ -84,7 +89,18 @@ impl Tray {
             .with_menu_on_left_click(false)
             .build()
             .expect("tray icon");
-        Self { _icon: icon, check, status, recent, recent_items: Vec::new(), undo, settings, login, top, quit }
+        Self {
+            _icon: icon,
+            check,
+            status,
+            recent,
+            recent_items: Vec::new(),
+            undo,
+            settings,
+            login,
+            top,
+            quit,
+        }
     }
 
     pub fn action(&self, msg: TrayMsg) -> Option<Action> {
@@ -107,7 +123,10 @@ impl Tray {
         } else if id == self.quit.id() {
             Some(Action::Quit)
         } else {
-            self.recent_items.iter().find(|(item, _)| id == item.id()).map(|(_, p)| Action::Reveal(p.clone()))
+            self.recent_items
+                .iter()
+                .find(|(item, _)| id == item.id())
+                .map(|(_, p)| Action::Reveal(p.clone()))
         }
     }
 
@@ -137,7 +156,10 @@ impl Tray {
             let _ = self.recent.remove(&item);
         }
         for path in recent {
-            let label = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let label = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             let item = MenuItem::new(label, true, None);
             let _ = self.recent.append(&item);
             self.recent_items.push((item, path.clone()));
