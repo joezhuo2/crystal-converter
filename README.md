@@ -128,10 +128,10 @@ The Convert wheel leaves out the format the file already has.
 
 | You drop | Convert to |
 |---|---|
-| Image (PNG, JPG, WebP, AVIF, BMP, TIFF, ICO, HEIC, SVG, TGA) | PNG, JPG, WebP, AVIF, GIF, ICO, BMP, PDF |
+| Image (PNG, JPG, WebP, AVIF, BMP, TIFF, ICO, HEIC, SVG, TGA) | PNG, JPG, WebP, AVIF, GIF, ICO, BMP, PDF, Favicon |
 | Animated GIF | MP4, WebM, WebP, PNG, JPG |
 | Video (MP4, MOV, MKV, WebM, AVI, WMV, FLV, MPG, TS, 3GP) | MP4, WebM, MOV, MKV, AVI, GIF, MP3, M4A |
-| Audio (MP3, WAV, FLAC, OGG, Opus, M4A, AAC, WMA, AIFF) | MP3, WAV, FLAC, Opus, OGG, M4A |
+| Audio (MP3, WAV, FLAC, OGG, Opus, M4A, AAC, WMA, AIFF) | MP3, WAV, FLAC, Opus, OGG, M4A, M4R |
 | Document (DOC, DOCX, ODT, RTF, TXT, HTML) | PDF, DOCX, ODT, TXT, HTML |
 | Spreadsheet or slides (XLS, XLSX, ODS, CSV, PPT, PPTX, ODP) | PDF |
 | PDF | PNG, JPG (one image per page), DOCX |
@@ -147,7 +147,7 @@ background.
 
 | File | Built-in slices |
 |---|---|
-| Image | Quality 75, 50%, 1920 px, 1080 px, No metadata, Rotate |
+| Image | Quality 75, 50%, 1920 px, 1080 px, No metadata, Rotate, Crop 1:1, 4:3, 16:9, 9:16, Grayscale, No GPS (JPG, PNG, WebP), Lossless (PNG) |
 | Video | 8 MB, 25 MB, 50 MB, 1080p, 720p, 30 fps, Mute, Rotate |
 | Audio | +6 dB, -6 dB, Normalize (−14 LUFS), Trim silence, Mono, 128 kbps |
 
@@ -155,7 +155,25 @@ Size targets work out a bitrate from the length of the file. A file that's
 already under the target is re-encoded at normal quality instead. Presets can
 combine any of: output format, max size, longest edge, scale, quality, audio
 bitrate, frame rate, volume, rotation, loudness normalization, silence
-trimming, mono, mute and stripping metadata. A wheel shows up to 10 slices.
+trimming, mono, mute and stripping metadata. Presets can also fade, change speed (pitch kept), cut audio from a start time
+for a set length, make images grayscale and remove only the GPS location.
+A wheel shows up to 16 slices.
+
+Notes on the image and audio slices:
+
+- **Crop** is a centre crop to the ratio.
+- **Favicon** writes one `.ico` holding 16, 32, 48, 64, 128 and 256 px
+  versions, padded to a square with transparency.
+- **Lossless** re-compresses a PNG with ffmpeg at the maximum zlib level; the
+  pixels are identical and a result that isn't smaller keeps the original
+  bytes. Gamma and colour profile chunks are dropped, and animated PNG is
+  refused. Typical saving: 21% on one ffmpeg-made test image,
+  little or nothing on PNGs that are already optimised.
+- **No GPS** blanks the GPS block in the Exif of JPG, PNG and WebP files and
+  keeps the rest. Other formats (HEIC, TIFF, ...) are refused rather than
+  copied with their location. XMP copies of the location are not touched.
+- **M4R** makes an iPhone ringtone (AAC in an MP4 container) cut to 40 s,
+  the longest iOS accepts for ringtones.
 
 ## Settings and keys
 
