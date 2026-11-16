@@ -8,6 +8,7 @@ pub enum Category {
     Video,
     Audio,
     Document,
+    Archive,
     Any,
 }
 
@@ -26,6 +27,7 @@ impl Category {
             Self::Video => "Video",
             Self::Audio => "Audio",
             Self::Document => "Document",
+            Self::Archive => "Archive",
             Self::Any => "Any",
         }
     }
