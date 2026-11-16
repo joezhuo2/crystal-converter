@@ -1,9 +1,12 @@
 use crate::config::Config;
-use std::{env, path::Path};
+use std::{env, path::Path, sync::Mutex};
 use windows::{
     core::{HSTRING, PCWSTR},
-    Win32::System::Registry::{
-        RegDeleteKeyValueW, RegDeleteTreeW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ,
+    Win32::{
+        Media::Audio::{PlaySoundW, SND_ASYNC, SND_FLAGS, SND_MEMORY, SND_NODEFAULT},
+        System::Registry::{
+            RegDeleteKeyValueW, RegDeleteTreeW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ,
+        },
     },
 };
 
@@ -187,29 +190,36 @@ fn synth(notes: &[(f32, f32, f32)]) -> Vec<u8> {
     wav
 }
 
+static PLAYING: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
 pub fn play(sound: Sound) {
-    use std::sync::OnceLock;
-    use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
-    static START: OnceLock<Vec<u8>> = OnceLock::new();
-    static DONE: OnceLock<Vec<u8>> = OnceLock::new();
-    static ERROR: OnceLock<Vec<u8>> = OnceLock::new();
     let wav = match sound {
-        Sound::Start => START.get_or_init(|| synth(&[(659.25, 0.0, 0.12), (987.77, 0.07, 0.2)])),
-        Sound::Done => DONE.get_or_init(|| {
-            synth(&[
-                (783.99, 0.0, 0.35),
-                (1046.5, 0.09, 0.45),
-                (1567.98, 0.18, 0.55),
-            ])
-        }),
-        Sound::Error => ERROR.get_or_init(|| synth(&[(311.13, 0.0, 0.2), (233.08, 0.13, 0.32)])),
+        Sound::Start => synth(&[(659.25, 0.0, 0.12), (987.77, 0.07, 0.2)]),
+        Sound::Done => synth(&[
+            (783.99, 0.0, 0.35),
+            (1046.5, 0.09, 0.45),
+            (1567.98, 0.18, 0.55),
+        ]),
+        Sound::Error => synth(&[(311.13, 0.0, 0.2), (233.08, 0.13, 0.32)]),
     };
+    let mut playing = PLAYING.lock().unwrap();
     unsafe {
         let _ = PlaySoundW(
             PCWSTR(wav.as_ptr().cast()),
             None,
             SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
         );
+    }
+    *playing = wav;
+}
+
+pub fn stop_sound() {
+    let mut playing = PLAYING.lock().unwrap();
+    if !playing.is_empty() {
+        unsafe {
+            let _ = PlaySoundW(PCWSTR::null(), None, SND_FLAGS(0));
+        }
+        *playing = Vec::new();
     }
 }
 
