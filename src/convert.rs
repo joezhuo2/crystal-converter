@@ -77,7 +77,7 @@ pub fn run(job: Job, cancel: &AtomicBool, emit: &mut dyn FnMut(Event)) {
             return;
         }
         match result {
-            Ok(p) => outputs.push(p),
+            Ok(p) => outputs.extend(p),
             Err(e) => failed.push(format!("{name}: {e}")),
         }
     }
@@ -93,7 +93,7 @@ fn convert(
     job: &Job,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(f32),
-) -> Result<PathBuf, String> {
+) -> Result<Vec<PathBuf>, String> {
     let input = &group[0];
     let category = detect(input).ok_or("unsupported file type")?;
     let in_ext = ext_of(input);
@@ -109,6 +109,9 @@ fn convert(
         None => input.parent().map(Path::to_path_buf).unwrap_or_default(),
     };
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    if category == Category::Document && in_ext == "pdf" && matches!(fmt.as_str(), "png" | "jpg") {
+        return pdf_pages(input, &dir, &stem(input), &fmt, cancel, progress);
+    }
     let out = unique_path(&dir, &stem(input), suffix.as_deref(), &fmt);
     let result = match category {
         Category::Document => office(input, &fmt, &out),
@@ -127,7 +130,74 @@ fn convert(
     if result.is_err() {
         let _ = fs::remove_file(&out);
     }
-    result.map(|_| out)
+    result.map(|_| vec![out])
+}
+
+fn pdf_pages(
+    input: &Path,
+    dir: &Path,
+    stem: &str,
+    fmt: &str,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<Vec<PathBuf>, String> {
+    use windows::{
+        core::HSTRING,
+        Data::Pdf::{PdfDocument, PdfPageRenderOptions},
+        Graphics::Imaging::BitmapEncoder,
+        Storage::{
+            StorageFile,
+            Streams::{DataReader, InMemoryRandomAccessStream},
+        },
+        Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED},
+    };
+    let w = |e: windows::core::Error| format!("PDF: {}", e.message());
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    }
+    let path = std::path::absolute(input).map_err(|e| e.to_string())?;
+    let file = StorageFile::GetFileFromPathAsync(&HSTRING::from(path.as_os_str()))
+        .and_then(|op| op.join())
+        .map_err(w)?;
+    let doc = PdfDocument::LoadFromFileAsync(&file)
+        .and_then(|op| op.join())
+        .map_err(w)?;
+    let count = doc.PageCount().map_err(w)?;
+    let encoder = if fmt == "jpg" {
+        BitmapEncoder::JpegEncoderId()
+    } else {
+        BitmapEncoder::PngEncoderId()
+    }
+    .map_err(w)?;
+    let mut outputs = Vec::new();
+    for i in 0..count {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        let page = doc.GetPage(i).map_err(w)?;
+        let size = page.Size().map_err(w)?;
+        let options = PdfPageRenderOptions::new().map_err(w)?;
+        options
+            .SetDestinationWidth((size.Width * 2.0).round() as u32)
+            .map_err(w)?;
+        options.SetBitmapEncoderId(encoder).map_err(w)?;
+        let stream = InMemoryRandomAccessStream::new().map_err(w)?;
+        page.RenderWithOptionsToStreamAsync(&stream, &options)
+            .and_then(|op| op.join())
+            .map_err(w)?;
+        let len = stream.Size().map_err(w)? as u32;
+        let reader =
+            DataReader::CreateDataReader(&stream.GetInputStreamAt(0).map_err(w)?).map_err(w)?;
+        reader.LoadAsync(len).and_then(|op| op.join()).map_err(w)?;
+        let mut bytes = vec![0u8; len as usize];
+        reader.ReadBytes(&mut bytes).map_err(w)?;
+        let suffix = (count > 1).then(|| format!("p{}", i + 1));
+        let out = unique_path(dir, stem, suffix.as_deref(), fmt);
+        fs::write(&out, bytes).map_err(|e| e.to_string())?;
+        outputs.push(out);
+        progress((i + 1) as f32 / count as f32);
+    }
+    Ok(outputs)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -638,7 +708,11 @@ fn office(input: &Path, fmt: &str, out: &Path) -> Result<(), String> {
     } else {
         fmt
     };
-    let status = command(soffice)
+    let mut cmd = command(soffice);
+    if ext_of(input) == "pdf" {
+        cmd.arg("--infilter=writer_pdf_import");
+    }
+    let status = cmd
         .args([
             "--headless",
             "--norestore",
@@ -1002,6 +1076,7 @@ mod tests {
             (png.clone(), Preset::convert_to("ico")),
             (png.clone(), Preset::convert_to("avif")),
             (png.clone(), Preset::convert_to("pdf")),
+            (dir.join("pic.pdf"), Preset::convert_to("png")),
             (
                 png.clone(),
                 Preset {

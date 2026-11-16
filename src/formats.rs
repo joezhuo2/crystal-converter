@@ -14,6 +14,7 @@ const AUDIO: &[&str] = &[
 ];
 const DOCUMENT: &[&str] = &[
     "doc", "docx", "odt", "rtf", "txt", "html", "xls", "xlsx", "ods", "csv", "ppt", "pptx", "odp",
+    "pdf",
 ];
 const OFFICE_PDF_ONLY: &[&str] = &["xls", "xlsx", "ods", "csv", "ppt", "pptx", "odp"];
 
@@ -54,6 +55,9 @@ fn by_ext(ext: &str) -> Option<Category> {
 fn sniff(h: &[u8]) -> Option<Category> {
     use Category::*;
     let at = |o: usize, s: &[u8]| h.get(o..o + s.len()) == Some(s);
+    if at(0, b"%PDF") {
+        return Some(Document);
+    }
     if at(0, b"\x89PNG")
         || at(0, b"\xFF\xD8\xFF")
         || at(0, b"GIF8")
@@ -94,6 +98,8 @@ pub fn targets(category: Category, ext: &str, office: bool) -> Vec<&'static str>
         Category::Image => &["png", "jpg", "webp", "avif", "gif", "ico", "bmp", "pdf"],
         Category::Video => &["mp4", "webm", "mov", "mkv", "avi", "gif", "mp3", "m4a"],
         Category::Audio => &["mp3", "wav", "flac", "opus", "ogg", "m4a"],
+        Category::Document if ext == "pdf" && office => &["png", "jpg", "docx"],
+        Category::Document if ext == "pdf" => &["png", "jpg"],
         Category::Document if !office => &[],
         Category::Document if OFFICE_PDF_ONLY.contains(&ext) => &["pdf"],
         Category::Document => &["pdf", "docx", "odt", "txt", "html"],
@@ -230,6 +236,11 @@ mod tests {
         assert_eq!(sniff(b"\0\0\0\x20ftypisom"), Some(Category::Video));
         assert_eq!(sniff(b"\0\0\0\x20ftypheic"), Some(Category::Image));
         assert_eq!(sniff(b"hello"), None);
+        assert_eq!(sniff(b"%PDF-1.7"), Some(Category::Document));
+        assert_eq!(
+            targets(Category::Document, "pdf", false),
+            vec!["png", "jpg"]
+        );
         assert_eq!(by_ext("docx"), Some(Category::Document));
     }
 

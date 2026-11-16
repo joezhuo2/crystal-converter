@@ -18,6 +18,11 @@ windows-core = "0.62"
 [dependencies.windows]
 version = "0.62"
 features = [
+  "Data_Pdf",
+  "Foundation",
+  "Graphics_Imaging",
+  "Storage",
+  "Storage_Streams",
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_Media_Audio",
@@ -39,6 +44,12 @@ features = [
 
 [build-dependencies]
 winresource = "0.1"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
 
 [profile.release]
 lto = true
