@@ -201,6 +201,29 @@ fn modify_builtins(category: Category) -> Vec<Preset> {
     }
 }
 
+fn tool_slices(kind: WheelKind, category: Category, ext: &str) -> Vec<Preset> {
+    match (kind, category) {
+        (WheelKind::Convert, Category::Audio | Category::Video) => {
+            vec![Preset::convert_to("srt")]
+        }
+        (WheelKind::Modify, Category::Document) if ext == "pdf" => {
+            [("Screen", 72), ("Ebook", 150), ("Printer", 300)]
+                .into_iter()
+                .map(|(name, dpi)| Preset {
+                    format: "pdf".into(),
+                    quality: dpi,
+                    ..Preset::named(name, category)
+                })
+                .collect()
+        }
+        (WheelKind::Modify, Category::Image) if ext != "gif" => vec![Preset {
+            format: "nobg".into(),
+            ..Preset::named("No background", category)
+        }],
+        _ => Vec::new(),
+    }
+}
+
 pub fn slices(
     kind: WheelKind,
     category: Category,
@@ -215,6 +238,7 @@ pub fn slices(
             .collect(),
         WheelKind::Modify => modify_builtins(category),
     };
+    out.extend(tool_slices(kind, category, ext));
     out.extend(
         presets
             .iter()
@@ -259,5 +283,18 @@ mod tests {
         let audio = slices(WheelKind::Modify, Category::Audio, "mp3", false, &presets);
         assert!(!audio.iter().any(|p| p.name == "Discord 10 MB"));
         assert!(video.len() <= MAX_SLICES);
+    }
+
+    #[test]
+    fn tool_slices_follow_file_type() {
+        let pdf = slices(WheelKind::Modify, Category::Document, "pdf", false, &[]);
+        assert_eq!(pdf.len(), 3);
+        assert!(pdf.iter().all(|p| p.format == "pdf"));
+        let img = slices(WheelKind::Modify, Category::Image, "jpg", false, &[]);
+        assert!(img.iter().any(|p| p.format == "nobg"));
+        let gif = slices(WheelKind::Modify, Category::Image, "gif", false, &[]);
+        assert!(!gif.iter().any(|p| p.format == "nobg"));
+        let audio = slices(WheelKind::Convert, Category::Audio, "mp3", false, &[]);
+        assert_eq!(audio.last().map(|p| p.format.as_str()), Some("srt"));
     }
 }

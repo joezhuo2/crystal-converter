@@ -1,5 +1,6 @@
-use crate::config::{Category, Preset};
+use crate::config::{Category, Config, Preset};
 use crate::formats::{detect, ext_of};
+use crate::tools::{self, Tool};
 use std::{
     env, fs,
     io::{self, BufRead, BufReader, Read},
@@ -103,7 +104,9 @@ fn convert(
     } else {
         p.format.clone()
     };
-    let suffix = (fmt == in_ext).then(|| slug(&p.name));
+    let suffix = (fmt == in_ext)
+        .then(|| slug(&p.name))
+        .or_else(|| (fmt == "nobg").then(|| "nobg".into()));
     let dir = match &job.out_dir {
         Some(d) => d.clone(),
         None => input.parent().map(Path::to_path_buf).unwrap_or_default(),
@@ -112,8 +115,14 @@ fn convert(
     if category == Category::Document && in_ext == "pdf" && matches!(fmt.as_str(), "png" | "jpg") {
         return pdf_pages(input, &dir, &stem(input), &fmt, cancel, progress);
     }
-    let out = unique_path(&dir, &stem(input), suffix.as_deref(), &fmt);
+    let out_ext = if fmt == "nobg" { "png" } else { &fmt };
+    let out = unique_path(&dir, &stem(input), suffix.as_deref(), out_ext);
     let result = match category {
+        Category::Document if in_ext == "pdf" && fmt == "pdf" => {
+            compress_pdf(input, &out, p.quality, cancel)
+        }
+        _ if fmt == "nobg" => remove_background(input, &out, cancel),
+        Category::Audio | Category::Video if fmt == "srt" => subtitles(input, &out, cancel),
         Category::Document => office(input, &fmt, &out),
         Category::Image if fmt == "pdf" => images_to_pdf(group, &out, p, cancel, progress),
         _ => ffmpeg_convert(
@@ -552,7 +561,7 @@ pub fn build_args(
     a
 }
 
-fn path_dirs() -> Vec<PathBuf> {
+pub fn path_dirs() -> Vec<PathBuf> {
     env::split_paths(&env::var_os("PATH").unwrap_or_default()).collect()
 }
 
@@ -693,6 +702,94 @@ fn hw_encoder() -> Option<&'static str> {
                     .is_ok_and(|s| s.success())
             })
     })
+}
+
+fn tool(t: Tool) -> Result<PathBuf, String> {
+    tools::find(t).ok_or_else(|| tools::needs(t))
+}
+
+fn run_tool(mut cmd: Command, cancel: &AtomicBool) -> Result<(), String> {
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_string(&mut s);
+            }
+            s
+        })
+    };
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let err = drain(child.stderr.take().map(|p| Box::new(p) as _));
+    let status = loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+        }
+        if let Some(s) = child.try_wait().map_err(|e| e.to_string())? {
+            break s;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let text = format!(
+        "{}\n{}",
+        out.join().unwrap_or_default(),
+        err.join().unwrap_or_default()
+    );
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
+    if status.success() {
+        Ok(())
+    } else {
+        Err(text
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("tool failed")
+            .to_string())
+    }
+}
+
+fn compress_pdf(input: &Path, out: &Path, quality: u32, cancel: &AtomicBool) -> Result<(), String> {
+    let mut cmd = command(tool(Tool::Ghostscript)?);
+    cmd.args(tools::gs_args(input, out, quality));
+    run_tool(cmd, cancel)
+}
+
+fn remove_background(input: &Path, out: &Path, cancel: &AtomicBool) -> Result<(), String> {
+    let mut cmd = command(tool(Tool::Rembg)?);
+    cmd.arg("i").arg(input).arg(out);
+    run_tool(cmd, cancel)
+}
+
+fn subtitles(input: &Path, out: &Path, cancel: &AtomicBool) -> Result<(), String> {
+    let whisper = tool(Tool::Whisper)?;
+    let name = Config::load().whisper_model;
+    let model = tools::model_path(&name);
+    if !model.exists() {
+        return Err(tools::needs_model(&name));
+    }
+    if !probe(input)?.has_audio {
+        return Err("no audio to transcribe".into());
+    }
+    let wav = env::temp_dir().join(format!(
+        "crystal-converter-{}-{}.wav",
+        std::process::id(),
+        next_id()
+    ));
+    let mut args = base_args(input);
+    args.extend(["-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"].map(String::from));
+    args.push(wav.to_string_lossy().into());
+    let mut cmd = command(whisper);
+    cmd.args(tools::whisper_args(&model, &wav, &out.with_extension("")));
+    let result = run_ffmpeg(&args, None, cancel, &mut |_| {}).and_then(|_| run_tool(cmd, cancel));
+    let _ = fs::remove_file(&wav);
+    result
 }
 
 fn office(input: &Path, fmt: &str, out: &Path) -> Result<(), String> {
