@@ -1156,6 +1156,63 @@ impl SettingsApp {
             &|x| format!("{x:+.1} dB"),
         );
         p.volume_db = f;
+        let seconds = |x: f32| {
+            if x <= 0.0 {
+                "Off".to_string()
+            } else {
+                format!("{x:.0} s")
+            }
+        };
+        slider(
+            ui,
+            "Fade",
+            "Audio fade in and out",
+            "fade",
+            &mut p.fade_s,
+            0.0,
+            10.0,
+            0.5,
+            &seconds,
+        );
+        slider(
+            ui,
+            "Speed",
+            "Audio speed, pitch kept",
+            "speed",
+            &mut p.speed,
+            0.5,
+            2.0,
+            0.05,
+            &|x| {
+                if (x - 1.0).abs() < 0.01 {
+                    "Off".to_string()
+                } else {
+                    format!("{x:.2}x")
+                }
+            },
+        );
+        slider(
+            ui,
+            "Cut start",
+            "Audio, seconds to skip",
+            "cut0",
+            &mut p.cut_start,
+            0.0,
+            600.0,
+            1.0,
+            &seconds,
+        );
+        slider(
+            ui,
+            "Cut length",
+            "Audio, seconds to keep",
+            "cut1",
+            &mut p.cut_len,
+            0.0,
+            600.0,
+            1.0,
+            &seconds,
+        );
         row(ui, "Rotate", "", |ui| {
             glide_bar(
                 ui,
@@ -1184,6 +1241,8 @@ impl SettingsApp {
             ("Mono", &mut p.mono),
             ("Mute", &mut p.mute),
             ("Strip metadata", &mut p.strip_metadata),
+            ("Grayscale", &mut p.grayscale),
+            ("Remove GPS only", &mut p.strip_gps),
         ] {
             row(ui, label, "", |ui| {
                 switch(ui, value);
