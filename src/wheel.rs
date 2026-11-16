@@ -2,7 +2,7 @@ use crate::{
     app,
     config::{Category, Config, OutputMode, Preset, WheelKind},
     convert::{self, Event, Job},
-    formats, hook,
+    formats, hook, import,
     render::{self, CenterIcon, Fonts, Hit, Scene, SliceView, Status},
     sys::{self, Sound},
 };
@@ -626,7 +626,14 @@ impl Wheel {
         }
         let out_dir = (self.config.output_mode == OutputMode::Folder
             && !self.config.output_folder.trim().is_empty())
-        .then(|| PathBuf::from(self.config.output_folder.trim()));
+        .then(|| PathBuf::from(self.config.output_folder.trim()))
+        .or_else(|| {
+            self.files
+                .iter()
+                .any(|f| import::is_staged(f))
+                .then(import::pictures_dir)
+                .flatten()
+        });
         let job = Job {
             files: self.files.clone(),
             preset,
@@ -1221,7 +1228,7 @@ unsafe extern "system" fn wheel_proc(
     }
 }
 
-fn read_files(data: &IDataObject) -> Vec<PathBuf> {
+pub(crate) fn read_files(data: &IDataObject) -> Vec<PathBuf> {
     let format = FORMATETC {
         cfFormat: CF_HDROP.0,
         ptd: std::ptr::null_mut(),
@@ -1244,6 +1251,15 @@ fn read_files(data: &IDataObject) -> Vec<PathBuf> {
             })
             .collect();
         ReleaseStgMedium(&mut medium);
+        files
+    }
+}
+
+fn dropped_files(data: &IDataObject) -> Vec<PathBuf> {
+    let files = read_files(data);
+    if files.is_empty() {
+        import::from_browser(data)
+    } else {
         files
     }
 }
@@ -1271,7 +1287,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
-        let files = data.ok().map(read_files).unwrap_or_default();
+        let files = data.ok().map(dropped_files).unwrap_or_default();
         let accept = app::with_wheel(|w| w.drag_enter(files, (pt.x, pt.y))).unwrap_or(false);
         set_effect(effect, accept);
         Ok(())
@@ -1304,7 +1320,12 @@ impl IDropTarget_Impl for DropTarget_Impl {
         pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
-        let files = data.ok().map(read_files).unwrap_or_default();
+        let known = app::with_wheel(|w| !w.files.is_empty()).unwrap_or(false);
+        let files = match data.ok().ok() {
+            Some(d) if known => read_files(d),
+            Some(d) => dropped_files(d),
+            None => Vec::new(),
+        };
         let accept = app::with_wheel(|w| w.drop_files(files, (pt.x, pt.y))).unwrap_or(false);
         set_effect(effect, accept);
         Ok(())

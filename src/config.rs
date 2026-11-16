@@ -119,6 +119,8 @@ impl Preset {
 pub struct Config {
     pub convert_key: u32,
     pub modify_key: u32,
+    pub selection_key: u32,
+    pub clipboard_key: u32,
     pub close_delay_ms: u32,
     pub sounds: bool,
     pub copy_to_clipboard: bool,
@@ -139,6 +141,8 @@ impl Default for Config {
         Self {
             convert_key: 0xC0,
             modify_key: 0x14,
+            selection_key: 0x45,
+            clipboard_key: 0x56,
             close_delay_ms: 1500,
             sounds: true,
             copy_to_clipboard: false,

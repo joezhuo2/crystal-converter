@@ -3,6 +3,7 @@ pub mod config;
 pub mod convert;
 pub mod formats;
 pub mod hook;
+pub mod import;
 pub mod render;
 pub mod settings;
 pub mod sys;
