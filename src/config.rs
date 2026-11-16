@@ -244,6 +244,7 @@ pub struct Config {
     pub always_on_top: bool,
     pub context_menu: bool,
     pub check_updates: bool,
+    pub whisper_model: String,
     pub presets: Vec<Preset>,
 }
 
@@ -267,6 +268,7 @@ impl Default for Config {
             always_on_top: true,
             context_menu: false,
             check_updates: true,
+            whisper_model: "base".into(),
             presets: default_presets(),
         }
     }

@@ -11,6 +11,7 @@ pub mod pdfmerge;
 pub mod render;
 pub mod settings;
 pub mod sys;
+pub mod tools;
 pub mod tray;
 pub mod update;
 pub mod wheel;
