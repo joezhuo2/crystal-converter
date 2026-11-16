@@ -6,6 +6,17 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-11-16
+
+### Added
+
+- Preset quick keys: bind a key to a preset in Settings > Presets, press it
+  while dragging a file and drop anywhere to run that preset with no wheel.
+- Import and export presets in Settings > Presets, as a JSON file or as pasted
+  text. Imports are validated and added to your list.
+- Custom ffmpeg arguments per preset, for advanced users. They are passed to
+  ffmpeg as separate arguments, never through a shell.
+
 ## [0.1.6] - 2026-11-16
 
 ### Added
@@ -141,7 +152,8 @@ follows [Semantic Versioning](https://semver.org/).
   spring switches, gliding tabs and button icon feedback).
 - Release zip with ffmpeg bundled, plus a standalone exe.
 
-[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.3...v0.1.4
