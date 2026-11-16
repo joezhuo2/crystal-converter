@@ -6,6 +6,22 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-11-16
+
+### Added
+
+- PDF compression through Ghostscript: PDFs get Screen, Ebook and Printer
+  slices on the Modify wheel.
+- Speech to subtitles: audio and video get an SRT slice that uses whisper.cpp
+  with a Whisper model of your choice (base by default). For video it is used
+  when the file has no text subtitle track of its own.
+- Background removal: a "No background" slice saves a transparent PNG through
+  rembg.
+- Settings > Tools shows whether Ghostscript, whisper.cpp and rembg were found,
+  and where. It downloads whisper.cpp and its model on request, verified by
+  size and SHA-256, and offers an install command or the download page for
+  Ghostscript and rembg.
+
 ## [0.1.8] - 2026-11-16
 
 ### Added
@@ -167,7 +183,8 @@ follows [Semantic Versioning](https://semver.org/).
   spring switches, gliding tabs and button icon feedback).
 - Release zip with ffmpeg bundled, plus a standalone exe.
 
-[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.9...HEAD
+[0.1.9]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/joezhuo2/crystal-converter/compare/v0.1.5...v0.1.6
